@@ -165,7 +165,7 @@ Button:focus {
 }
 
 /* --------------------------------------------------------------------------
-   Home View: Boxed Centered Art & Focused Menu
+   Home View: Art beside the OSIS menu
    -------------------------------------------------------------------------- */
 
 #home-view-container {
@@ -175,26 +175,29 @@ Button:focus {
     padding: 1;
 }
 
+#home-content-row {
+    width: auto;
+    height: auto;
+    align: center middle;
+}
+
 #home-art-box {
-    width: 75;
+    width: 76;
     height: auto;
     border: solid #9333ea;
-    border-title-align: center;
-    border-title-color: #facc15;
-    border-title-style: bold;
     background: #0d0a1b;
     padding: 0 1;
     align: center middle;
-    margin-bottom: 1;
+    margin-right: 2;
 }
 
 #home-art-content {
-    width: 71;
+    width: 1fr;
     height: auto;
 }
 
 #home-menu-box {
-    width: 38;
+    width: 68;
     height: auto;
     border: solid #2c214c;
     border-title-align: center;
@@ -202,13 +205,21 @@ Button:focus {
     border-title-style: bold;
     background: #0d0a1b;
     padding: 1 2;
-    align: center middle;
+    align: left middle;
 }
 
 #home-menu-title {
+    width: 100%;
+    height: 7;
+    content-align: center middle;
+    border-bottom: solid #2c214c;
+    margin-bottom: 1;
+}
+
+#home-menu-subtitle {
+    width: 100%;
     text-align: center;
     color: #facc15;
-    text-style: bold;
     margin-bottom: 1;
 }
 
@@ -221,6 +232,7 @@ Button:focus {
     background: #18122c;
     color: #d1c9e8;
     text-align: left;
+    content-align: left middle;
     padding: 0 1;
 }
 
@@ -241,6 +253,17 @@ Button:focus {
 
 #dashboard-view-container {
     height: 1fr;
+}
+
+#dashboard-ascii-title, #shell-ascii-title, #settings-ascii-title {
+    height: 5;
+    margin: 0 0 1 0;
+    color: #facc15;
+    text-style: bold;
+}
+
+#settings-ascii-title {
+    margin-bottom: 0;
 }
 
 TabbedContent {
@@ -308,7 +331,7 @@ TabPane {
 }
 
 .filter-select {
-    width: 18;
+    width: 22;
     height: 1;
     min-height: 1;
     margin-right: 1;
@@ -316,6 +339,14 @@ TabPane {
     background: #120e24;
     color: #d1c9e8;
     padding: 0 1;
+}
+
+#filter-operator {
+    width: 28;
+}
+
+#select-sync-source {
+    width: 44;
 }
 
 SelectCurrent {
@@ -341,13 +372,44 @@ SelectCurrent {
     height: 1fr;
 }
 
-#catalog-table-box {
+#catalog-left-column {
     width: 60%;
+    height: 1fr;
+    margin-right: 1;
+}
+
+#catalog-right-column {
+    width: 40%;
+    height: 1fr;
+}
+
+#catalog-table-box {
+    width: 1fr;
     height: 1fr;
     border: solid #2c214c;
     background: #0b0818;
-    margin-right: 1;
     padding: 0;
+}
+
+#schema-explorer-box {
+    height: 1fr;
+    min-height: 8;
+    border: solid #2c214c;
+    background: #0b0818;
+    margin-top: 1;
+    padding: 0 1;
+}
+
+#schema-explorer-title {
+    height: 1;
+    color: #facc15;
+    text-style: bold;
+}
+
+#schema-explorer {
+    height: 1fr;
+    background: transparent;
+    color: #d1c9e8;
 }
 
 #catalog-table-box:focus-within {
@@ -355,7 +417,6 @@ SelectCurrent {
 }
 
 #satellite-detail-pane {
-    width: 40%;
     height: 1fr;
     border: solid #2c214c;
     background: #0b0818;
@@ -621,14 +682,14 @@ DataTable > .datatable--hover {
 }
 
 #shell-input-row {
-    height: 1;
+    height: 5;
     align: left middle;
 }
 
 #shell-query-input {
     width: 1fr;
-    height: 1;
-    border: none;
+    height: 5;
+    border: solid #3b2c63;
     background: #120e24;
     color: #ffffff;
     margin-right: 1;
@@ -644,6 +705,24 @@ DataTable > .datatable--hover {
     height: 1;
     background: #2e1d54;
     color: #facc15;
+}
+
+#shell-output-controls {
+    height: 1;
+    align: left middle;
+    margin-top: 1;
+}
+
+#shell-editor-hint {
+    width: 1fr;
+    color: #756999;
+}
+
+#btn-toggle-output {
+    min-width: 14;
+    height: 1;
+    background: #18122c;
+    color: #c084fc;
 }
 
 #btn-run-query:hover {
@@ -665,6 +744,12 @@ DataTable > .datatable--hover {
 
 #shell-results-table {
     height: 1fr;
+}
+
+#shell-raw-output {
+    height: 1fr;
+    padding: 1;
+    display: none;
 }
 
 /* --------------------------------------------------------------------------

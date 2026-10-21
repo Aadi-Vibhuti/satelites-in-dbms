@@ -19,6 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from rich.style import Style
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -38,7 +39,10 @@ from textual.widgets import (
     Static,
     TabbedContent,
     TabPane,
+    TextArea,
+    Tree,
 )
+from textual.widgets._select import SelectCurrent, SelectOverlay
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -46,9 +50,78 @@ if str(ROOT) not in sys.path:
 
 from app import art, queries
 from app.config import load_config, save_config
-from app.db import execute_raw_sql, ping, settings
+from app.db import execute_raw_sql, get_connection, ping, settings
 from ingest.apis import run_multi_source_sync
 
+
+class SQLQueryEditor(TextArea):
+    """Multiline SQL editor with shell history at its vertical boundaries."""
+
+    def __init__(self, text: str = "", **kwargs: Any) -> None:
+        super().__init__(text, **kwargs)
+        self.command_history: list[str] = []
+        self.history_index: int | None = None
+        self._history_draft = ""
+
+    async def _on_key(self, event) -> None:
+        # TextArea handles Enter in its private key handler, before a normal
+        # ``on_key`` handler can intercept it. Override that handler directly.
+        if event.key in ("enter", "ctrl+m", "shift+enter", "shift+ctrl+m"):
+            event.prevent_default()
+            event.stop()
+            if event.key.startswith("shift+") or not self.text.rstrip().endswith(";"):
+                self.insert("\n")
+            else:
+                self.app.execute_shell_query(self.text)
+            return
+        await super()._on_key(event)
+
+    def on_key(self, event) -> None:
+        row, _ = self.cursor_location
+        lines = self.text.splitlines() or [""]
+        if event.key == "up" and row == 0 and self.command_history:
+            event.prevent_default()
+            event.stop()
+            if self.history_index is None:
+                self._history_draft = self.text
+                self.history_index = len(self.command_history)
+            self.history_index = max(0, self.history_index - 1)
+            self.load_text(self.command_history[self.history_index])
+            return
+        if event.key == "down" and self.history_index is not None and row >= len(lines) - 1:
+            event.prevent_default()
+            event.stop()
+            self.history_index = min(len(self.command_history), self.history_index + 1)
+            value = self.command_history[self.history_index] if self.history_index < len(self.command_history) else self._history_draft
+            self.load_text(value)
+            if self.history_index == len(self.command_history):
+                self.history_index = None
+            return
+
+
+class StripedSelectOverlay(SelectOverlay):
+    """Select popup with a subtle alternate background on its option rows."""
+
+    def render_line(self, y):
+        strip = super().render_line(y)
+        line_number = self.scroll_offset.y + y
+        try:
+            option_index, _ = self._lines[line_number]
+        except IndexError:
+            return strip
+        if option_index % 2 == 1 and option_index != self.highlighted and option_index != self._mouse_hovering_over:
+            return strip.apply_style(Style(bgcolor="#151027"))
+        return strip
+
+
+class StripedSelect(Select):
+    """Select control using the application's lightly striped popup."""
+
+    def compose(self) -> ComposeResult:
+        yield SelectCurrent(self.prompt)
+        yield StripedSelectOverlay(type_to_search=self._type_to_search).data_bind(
+            compact=Select.compact
+        )
 
 def fmt_val(val: Any) -> str:
     """Format database values cleanly."""
@@ -100,6 +173,88 @@ def fmt_prob(prob: Any) -> Text:
         return Text(fmt_val(prob))
 
 
+def osis_block_logo() -> Text:
+    """Build a compact block-letter O.S.I.S logo with an offset shadow."""
+    glyphs = {
+        "O": ("01110", "10001", "10001", "10001", "01110"),
+        "S": ("01111", "10000", "01110", "00001", "11110"),
+        "I": ("111", "010", "010", "010", "111"),
+        ".": ("0", "0", "0", "0", "1"),
+    }
+    pattern: list[str] = []
+    for index, char in enumerate("O.S.I.S"):
+        glyph = glyphs[char]
+        if index:
+            pattern = [line + "0" for line in pattern]
+        if not pattern:
+            pattern = ["" for _ in range(5)]
+        pattern = [line + part for line, part in zip(pattern, glyph)]
+
+    height = len(pattern) + 1
+    width = len(pattern[0]) + 1
+    face = {(row, col) for row, line in enumerate(pattern) for col, bit in enumerate(line) if bit == "1"}
+    shadow = {
+        (row + 1, col + 1)
+        for row, col in face
+        if row + 1 < height and col + 1 < width and (row + 1, col + 1) not in face
+    }
+
+    logo = Text()
+    for row in range(height):
+        for col in range(width):
+            if (row, col) in face:
+                char, style = "█", "bold #facc15"
+            elif (row, col) in shadow:
+                char, style = "░", "bold #9333ea"
+            else:
+                char, style = " ", ""
+            logo.append(char * 2, style=style)
+        if row < height - 1:
+            logo.append("\n")
+    return logo
+
+
+def block_ascii_word(word: str) -> Text:
+    """Render a short heading in the dashboard's compact block style."""
+    glyphs = {
+        "A": ("01110", "10001", "11111", "10001", "10001"),
+        "B": ("11110", "10001", "11110", "10001", "11110"),
+        "D": ("11110", "10001", "10001", "10001", "11110"),
+        "E": ("11111", "10000", "11110", "10000", "11111"),
+        "G": ("01111", "10000", "10111", "10001", "01110"),
+        "H": ("10001", "10001", "11111", "10001", "10001"),
+        "I": ("111", "010", "010", "010", "111"),
+        "L": ("10000", "10000", "10000", "10000", "11111"),
+        "N": ("10001", "11001", "10101", "10011", "10001"),
+        "O": ("01110", "10001", "10001", "10001", "01110"),
+        "R": ("11110", "10001", "11110", "10100", "10010"),
+        "S": ("01111", "10000", "01110", "00001", "11110"),
+        "T": ("11111", "00100", "00100", "00100", "00100"),
+    }
+    letters = [glyphs[char] for char in word.upper() if char in glyphs]
+    logo = Text()
+    for row in range(5):
+        for index, glyph in enumerate(letters):
+            for bit in glyph[row]:
+                logo.append(("░" if bit == "1" else " ") * 2, style="bold #9333ea")
+            if index < len(letters) - 1:
+                logo.append(" ")
+        if row < 4:
+            logo.append("\n")
+    return logo
+
+
+def _format_mysql_table(columns: list[str], rows: list[tuple[Any, ...]]) -> list[str]:
+    """Format query results with the ASCII borders used by the MariaDB client."""
+    values = [[fmt_val(value) for value in row] for row in rows]
+    widths = [max(len(str(column)), *(len(row[index]) for row in values)) for index, column in enumerate(columns)]
+    border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+    lines = [border, "|" + "|".join(f" {str(column):<{width}} " for column, width in zip(columns, widths)) + "|", border]
+    lines.extend("|" + "|".join(f" {value:<{width}} " for value, width in zip(row, widths)) + "|" for row in values)
+    lines.append(border)
+    return lines
+
+
 class HelpModal(ModalScreen):
     """Minimalist Mission Control Operator Guide."""
 
@@ -119,7 +274,8 @@ class HelpModal(ModalScreen):
                 "  [yellow]?[/]          show this guide\n"
                 "  [yellow]q[/]          quit\n\n"
                 "[bold magenta]sql shell[/]\n"
-                "  • execute arbitrary sql queries directly against mariadb `ois_db`.\n"
+                "  • enter multiline sql; Shift+Enter adds a line and Enter runs after a trailing semicolon.\n"
+                "  • use ↑/↓ for lines and command history; toggle raw output for MariaDB-style results.\n"
                 "  • use quick chips (tables, satellites, etc.) or type custom sql.\n\n"
                 "[bold yellow]telemetry ingest[/]\n"
                 "  • multi-source integration with celestrak gp, satnogs db, wheretheiss live, nasa neows.\n"
@@ -162,47 +318,52 @@ class OISApp(App):
         self.cached_satellites: list[dict] = []
         self.current_report_subview = "op"
         self.db_connected = False
+        self.shell_output_mode = "neat"
+        self.shell_raw_history: list[str] = []
 
     def compose(self) -> ComposeResult:
         # Top status bar (clean, borderless top bar without bulky Header)
         with Horizontal(id="top-status-bar"):
             yield Button("< home", id="top-nav-btn")
-            yield Label("ois", id="top-title")
+            yield Label("orbital intelligence system", id="top-title")
             yield Label("● connecting", id="db-status-badge")
             yield Label("satellites: — · active: — · alerts: —", id="top-stats-summary")
 
         # VIEW 1: HOME PAGE (Near-empty with clean space ASCII art and menu)
         with Vertical(id="home-view-container"):
-            with Vertical(id="home-art-box"):
-                yield Static("", id="home-art-content")
-            with Vertical(id="home-menu-box"):
-                yield Label("orbital intelligence system", id="home-menu-title")
-                yield Button("1 · dashboard", id="menu-btn-dashboard", classes="home-menu-btn")
-                yield Button("2 · shell", id="menu-btn-shell", classes="home-menu-btn")
-                yield Button("3 · settings", id="menu-btn-settings", classes="home-menu-btn")
-                yield Button("q · exit", id="menu-btn-exit", classes="home-menu-btn")
-                yield Label("press 1-3 to switch · q to exit", id="home-menu-hint")
+            with Horizontal(id="home-content-row"):
+                with Vertical(id="home-art-box"):
+                    yield Static("", id="home-art-content")
+                with Vertical(id="home-menu-box"):
+                    yield Static("", id="home-menu-title")
+                    yield Label("Orbital Intelligence systems", id="home-menu-subtitle")
+                    yield Button("1 · dashboard", id="menu-btn-dashboard", classes="home-menu-btn")
+                    yield Button("2 · shell", id="menu-btn-shell", classes="home-menu-btn")
+                    yield Button("3 · settings", id="menu-btn-settings", classes="home-menu-btn")
+                    yield Button("q · exit", id="menu-btn-exit", classes="home-menu-btn")
+                    yield Label("press 1-3 to switch · q to exit", id="home-menu-hint")
 
         # VIEW 2: DASHBOARD
         with Vertical(id="dashboard-view-container"):
+            yield Static(block_ascii_word("dashboard"), id="dashboard-ascii-title")
             with TabbedContent(id="main-tabs"):
                 # TAB 1: FLEET CATALOG
                 with TabPane("catalog [1]", id="tab-catalog"):
                     with Horizontal(id="catalog-filter-bar"):
                         yield Input(placeholder="search name / norad...", id="catalog-search")
-                        yield Select[str](
+                        yield StripedSelect(
                             [("all statuses", "ALL"), ("active", "active"), ("inactive", "inactive"), ("decayed", "decayed")],
                             value="ALL",
                             id="filter-status",
                             classes="filter-select",
                         )
-                        yield Select[str](
+                        yield StripedSelect(
                             [("all types", "ALL"), ("comm", "comm"), ("nav", "nav"), ("earth obs", "eo"), ("science", "sci")],
                             value="ALL",
                             id="filter-type",
                             classes="filter-select",
                         )
-                        yield Select[str](
+                        yield StripedSelect(
                             [("all operators", "ALL")],
                             value="ALL",
                             id="filter-operator",
@@ -211,10 +372,15 @@ class OISApp(App):
                         yield Button("reset", id="btn-reset-filters")
 
                     with Horizontal(id="catalog-split-container"):
-                        with Vertical(id="catalog-table-box"):
-                            yield DataTable(id="table-satellites", cursor_type="row")
-                        with ScrollableContainer(id="satellite-detail-pane"):
-                            yield Static("[dim italic]select a satellite to inspect telemetry...[/]", id="detail-card-content")
+                        with Vertical(id="catalog-left-column"):
+                            with Vertical(id="catalog-table-box"):
+                                yield DataTable(id="table-satellites", cursor_type="row")
+                        with Vertical(id="catalog-right-column"):
+                            with ScrollableContainer(id="satellite-detail-pane"):
+                                yield Static("[dim italic]select a satellite to inspect telemetry...[/]", id="detail-card-content")
+                            with Vertical(id="schema-explorer-box"):
+                                yield Label("DATABASE STRUCTURE", id="schema-explorer-title")
+                                yield Tree("ois_db", id="schema-explorer")
 
                 # TAB 2: COLLISION ALERTS
                 with TabPane("alerts [2]", id="tab-alerts"):
@@ -253,7 +419,7 @@ class OISApp(App):
                     with Vertical(id="sync-controls-box"):
                         with Horizontal(id="sync-source-row"):
                             yield Label("[dim]source:[/] ")
-                            yield Select[str](
+                            yield StripedSelect(
                                 [
                                     ("all sources (celestrak + satnogs + iss)", "all"),
                                     ("celestrak gp", "celestrak"),
@@ -274,6 +440,7 @@ class OISApp(App):
 
         # VIEW 3: SQL SHELL
         with Vertical(id="shell-view-container"):
+            yield Static(block_ascii_word("shell"), id="shell-ascii-title")
             with Vertical(id="shell-top-controls"):
                 with Horizontal(id="shell-quick-row"):
                     yield Label("[dim]queries:[/] ")
@@ -284,22 +451,29 @@ class OISApp(App):
                     yield Button("debris", id="chip-sql-debris", classes="shell-chip-btn")
 
                 with Horizontal(id="shell-input-row"):
-                    yield Input(placeholder="enter sql query (e.g. select * from Satellite limit 10)...", id="shell-query-input")
+                    yield SQLQueryEditor("", id="shell-query-input", soft_wrap=True, show_line_numbers=False)
                     yield Button("run", id="btn-run-query")
 
+                with Horizontal(id="shell-output-controls"):
+                    yield Label("Shift+Enter adds a line · Enter runs after ; · ↑/↓ move through lines and history", id="shell-editor-hint")
+                    yield Button("raw output", id="btn-toggle-output")
                 yield Label("ready to execute queries against mariadb ois_db.", id="shell-status-banner")
 
             with Vertical(id="shell-results-box"):
-                yield DataTable(id="shell-results-table", cursor_type="row", zebra_stripes=True)
+                shell_results = DataTable(id="shell-results-table", cursor_type="row", zebra_stripes=True)
+                shell_results.add_column("Run a query to see results")
+                yield shell_results
+                yield RichLog(id="shell-raw-output", highlight=False, markup=False, wrap=False)
 
         # VIEW 4: SETTINGS
         with Vertical(id="settings-view-container"):
+            yield Static(block_ascii_word("settings"), id="settings-ascii-title")
             with ScrollableContainer(id="settings-panel"):
                 yield Label("settings", classes="settings-section-hdr")
 
                 yield Label("theme:", classes="settings-label")
                 with Horizontal(classes="settings-row"):
-                    yield Select[str](
+                    yield StripedSelect(
                         [
                             ("minimal dark", "minimal-dark"),
                             ("cyberpunk", "cyberpunk"),
@@ -353,6 +527,7 @@ class OISApp(App):
         self._init_catalog_table()
         self._init_alerts_table()
         self._init_reports_table()
+        self.load_database_structure()
         self.load_catalog()
         self.load_alerts()
         self.load_report_subview("op")
@@ -378,7 +553,7 @@ class OISApp(App):
 
         top_btn.display = (view_name != "home")
         if view_name == "shell":
-            self.query_one("#shell-query-input", Input).focus()
+            self.query_one("#shell-query-input", SQLQueryEditor).focus()
 
     def _apply_current_theme(self) -> None:
         theme = self.config.get("theme", "minimal-dark")
@@ -390,7 +565,8 @@ class OISApp(App):
         art_view = self.query_one("#home-art-content", Static)
         art_str = art.render_satellite_art(mode="clean", use_color=True, indent=0)
         art_view.update(Text.from_ansi(art_str))
-        self.query_one("#home-art-box", Vertical).border_title = "spacecraft"
+        self.query_one("#home-art-box", Vertical).border_title = ""
+        self.query_one("#home-menu-title", Static).update(osis_block_logo())
 
     # -------------------------------------------------------------------------
     # Database Status & Summary Banner
@@ -428,6 +604,63 @@ class OISApp(App):
         table = self.query_one("#table-satellites", DataTable)
         table.clear(columns=True)
         table.add_columns("NORAD", "Satellite Name", "Operator", "Status", "Type", "Incl (°)", "Apogee (km)", "Perigee (km)")
+
+    @work(thread=True)
+    def load_database_structure(self) -> None:
+        """Load table/view metadata and present it as an expandable tree."""
+        try:
+            with get_connection() as conn:
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute(
+                    "SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION, CREATE_TIME "
+                    "FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() "
+                    "ORDER BY TABLE_TYPE, TABLE_NAME"
+                )
+                objects = cursor.fetchall()
+                cursor.execute(
+                    "SELECT TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, COLUMN_TYPE, "
+                    "IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, EXTRA "
+                    "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+                    "ORDER BY TABLE_NAME, ORDINAL_POSITION"
+                )
+                columns = cursor.fetchall()
+                cursor.close()
+            self.call_from_thread(self._render_database_structure, objects, columns, None)
+        except Exception as exc:
+            self.call_from_thread(self._render_database_structure, [], [], str(exc))
+
+    def _render_database_structure(self, objects, columns, error) -> None:
+        tree = self.query_one("#schema-explorer", Tree)
+        tree.clear()
+        tree.root.set_label(f"{settings()['database']}  ·  {len(objects)} objects")
+        if error:
+            tree.root.add_leaf(f"Unable to load schema: {error}")
+            return
+        by_table: dict[str, list[dict[str, Any]]] = {}
+        for column in columns:
+            by_table.setdefault(column["TABLE_NAME"], []).append(column)
+        for obj in objects:
+            name = obj["TABLE_NAME"]
+            kind = "view" if obj["TABLE_TYPE"] == "VIEW" else "table"
+            props = [f"Type: {kind}"]
+            if obj.get("ENGINE"):
+                props.append(f"Engine: {obj['ENGINE']}")
+            if obj.get("TABLE_COLLATION"):
+                props.append(f"Collation: {obj['TABLE_COLLATION']}")
+            node = tree.root.add(f"{name}  [{kind}]", data="\n".join(props), expand=False)
+            for col in by_table.get(name, []):
+                details = [
+                    f"Column: {col['COLUMN_NAME']}", f"Type: {col['COLUMN_TYPE']}",
+                    f"Nullable: {col['IS_NULLABLE']}", f"Key: {col['COLUMN_KEY'] or '—'}",
+                    f"Default: {col['COLUMN_DEFAULT'] if col['COLUMN_DEFAULT'] is not None else '—'}",
+                    f"Extra: {col['EXTRA'] or '—'}",
+                ]
+                node.add_leaf(f"{col['COLUMN_NAME']}  :  {col['COLUMN_TYPE']}", data="\n".join(details))
+        tree.root.expand()
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if event.control.id == "schema-explorer" and event.node.data:
+            self.notify(str(event.node.data), title="Database object", timeout=8)
 
     def load_catalog(self) -> None:
         if not self.db_connected:
@@ -808,28 +1041,55 @@ class OISApp(App):
     # -------------------------------------------------------------------------
 
     def execute_shell_query(self, query: str | None = None) -> None:
-        inp = self.query_one("#shell-query-input", Input)
-        sql = query if query is not None else inp.value.strip()
+        inp = self.query_one("#shell-query-input", SQLQueryEditor)
+        sql = query if query is not None else inp.text.strip()
         if not sql:
             self.notify("Please enter a SQL statement", severity="warning")
             return
 
+        if sql not in inp.command_history:
+            inp.command_history.append(sql)
+        inp.history_index = None
+
         table = self.query_one("#shell-results-table", DataTable)
         banner = self.query_one("#shell-status-banner", Label)
+        raw_output = self.query_one("#shell-raw-output", RichLog)
         table.clear(columns=True)
 
         res = execute_raw_sql(sql)
+        raw_text = [f"MariaDB [ois_db]> {sql}"]
         if res["status"] == "ok":
             if "columns" in res:
                 table.add_columns(*res["columns"])
                 for row in res["rows"]:
                     table.add_row(*[fmt_val(cell) for cell in row])
                 banner.update(f"[bold green]Query OK:[/] {res['row_count']} row(s) returned in {res['duration_ms']} ms")
+                raw_text.extend(_format_mysql_table(res["columns"], res["rows"]))
+                raw_text.append(f"{res['row_count']} row(s) in set ({res['duration_ms'] / 1000:.2f} sec)")
             else:
                 banner.update(f"[bold green]{res.get('message', 'Query OK')}[/] in {res['duration_ms']} ms")
+                table.add_column("Status")
+                table.add_row(res.get("message", "Query OK"))
+                raw_text.append(f"Query OK, {res.get('affected_rows', 0)} row(s) affected ({res['duration_ms'] / 1000:.2f} sec)")
         else:
             banner.update(f"[bold red]SQL Error:[/] {res.get('error', 'Execution failed')}")
+            table.add_column("Status")
+            table.add_row("SQL error; see status above")
             self.notify("SQL execution error", severity="error")
+            raw_text.append(f"ERROR: {res.get('error', 'Execution failed')}")
+
+        inp.load_text("")
+        self.shell_raw_history.extend(raw_text + [""])
+        raw_output.clear()
+        for line in self.shell_raw_history:
+            raw_output.write(line)
+
+    def toggle_shell_output(self) -> None:
+        self.shell_output_mode = "raw" if self.shell_output_mode == "neat" else "neat"
+        raw_mode = self.shell_output_mode == "raw"
+        self.query_one("#shell-results-table", DataTable).display = not raw_mode
+        self.query_one("#shell-raw-output", RichLog).display = raw_mode
+        self.query_one("#btn-toggle-output", Button).label = "neat output" if raw_mode else "raw output"
 
     # -------------------------------------------------------------------------
     # Settings Management
@@ -919,34 +1179,32 @@ class OISApp(App):
         # SQL Shell Buttons & Chips
         elif btn_id == "btn-run-query":
             self.execute_shell_query()
+        elif btn_id == "btn-toggle-output":
+            self.toggle_shell_output()
         elif btn_id == "chip-sql-tables":
-            inp = self.query_one("#shell-query-input", Input)
-            inp.value = "SHOW TABLES;"
+            inp = self.query_one("#shell-query-input", SQLQueryEditor)
+            inp.load_text("SHOW TABLES;")
             self.execute_shell_query("SHOW TABLES;")
         elif btn_id == "chip-sql-satellites":
-            inp = self.query_one("#shell-query-input", Input)
-            inp.value = "SELECT NORAD_ID, Name, Operator, Status FROM Satellite LIMIT 10;"
-            self.execute_shell_query(inp.value)
+            inp = self.query_one("#shell-query-input", SQLQueryEditor)
+            inp.load_text("SELECT NORAD_ID, Name, Operator, Status FROM Satellite LIMIT 10;")
+            self.execute_shell_query(inp.text)
         elif btn_id == "chip-sql-alerts":
-            inp = self.query_one("#shell-query-input", Input)
-            inp.value = "SELECT Alert_ID, Distance_km, Probability, Status FROM Collision_Alerts LIMIT 10;"
-            self.execute_shell_query(inp.value)
+            inp = self.query_one("#shell-query-input", SQLQueryEditor)
+            inp.load_text("SELECT Alert_ID, Distance_km, Probability, Status FROM Collision_Alerts LIMIT 10;")
+            self.execute_shell_query(inp.text)
         elif btn_id == "chip-sql-positions":
-            inp = self.query_one("#shell-query-input", Input)
-            inp.value = "SELECT Satellite_ID, Observed_At, Lat, Lon, Alt_km FROM Position_History ORDER BY Observed_At DESC LIMIT 10;"
-            self.execute_shell_query(inp.value)
+            inp = self.query_one("#shell-query-input", SQLQueryEditor)
+            inp.load_text("SELECT Satellite_ID, Observed_At, Lat, Lon, Alt_km FROM Position_History ORDER BY Observed_At DESC LIMIT 10;")
+            self.execute_shell_query(inp.text)
         elif btn_id == "chip-sql-debris":
-            inp = self.query_one("#shell-query-input", Input)
-            inp.value = "SELECT Debris_ID, First_Seen, Status FROM Debris_Records LIMIT 10;"
-            self.execute_shell_query(inp.value)
+            inp = self.query_one("#shell-query-input", SQLQueryEditor)
+            inp.load_text("SELECT Debris_ID, First_Seen, Status FROM Debris_Records LIMIT 10;")
+            self.execute_shell_query(inp.text)
 
         # Settings Save Button
         elif btn_id == "btn-save-settings":
             self.save_settings_panel()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "shell-query-input":
-            self.execute_shell_query()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "catalog-search":
