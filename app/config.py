@@ -1,4 +1,4 @@
-"""Configuration management for OIS settings, themes, API keys, and database."""
+"""Configuration management for API access and database settings."""
 
 from __future__ import annotations
 
@@ -12,9 +12,10 @@ CONFIG_PATH = ROOT / "config.json"
 ENV_PATH = ROOT / ".env"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "theme": "minimal-dark",
     "nasa_api_key": "DEMO_KEY",
     "n2yo_api_key": "",
+    "spacetrack_identity": "",
+    "spacetrack_password": "",
     "default_api_source": "all",
     "db_host": "127.0.0.1",
     "db_port": 3307,
@@ -52,6 +53,10 @@ def load_config() -> dict[str, Any]:
                     cfg["nasa_api_key"] = v
                 elif k == "N2YO_API_KEY":
                     cfg["n2yo_api_key"] = v
+                elif k == "SPACETRACK_IDENTITY":
+                    cfg["spacetrack_identity"] = v
+                elif k == "SPACETRACK_PASSWORD":
+                    cfg["spacetrack_password"] = v
         except Exception:
             pass
 
@@ -90,6 +95,10 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
         env_lines.append(f"NASA_API_KEY={cfg['nasa_api_key']}")
     if cfg.get("n2yo_api_key"):
         env_lines.append(f"N2YO_API_KEY={cfg['n2yo_api_key']}")
+    if cfg.get("spacetrack_identity"):
+        env_lines.append(f"SPACETRACK_IDENTITY={cfg['spacetrack_identity']}")
+    if cfg.get("spacetrack_password"):
+        env_lines.append(f"SPACETRACK_PASSWORD={cfg['spacetrack_password']}")
 
     try:
         ENV_PATH.write_text("\n".join(env_lines) + "\n", encoding="utf-8")

@@ -106,6 +106,48 @@ Screen.-theme-matrix Button:focus {
     color: #facc15;
 }
 
+.back-home-btn {
+    width: auto;
+    height: 1;
+    min-height: 1;
+    min-width: 17;
+    padding: 0 1;
+    background: #18122c;
+    color: #c084fc;
+}
+
+.back-home-btn:hover {
+    background: #2c214c;
+    color: #facc15;
+}
+
+.analysis-report-btn {
+    min-width: 8;
+    height: 1;
+    margin-right: 1;
+    background: #18122c;
+    color: #c084fc;
+}
+
+.analysis-scan-btn {
+    min-width: 12;
+    height: 1;
+    margin-right: 1;
+    background: #2e1d54;
+    color: #facc15;
+}
+
+.analysis-scan-btn:hover {
+    background: #7c3aed;
+    color: #ffffff;
+}
+
+.analysis-report-btn.-active {
+    background: #7c3aed;
+    color: #fde047;
+    text-style: bold;
+}
+
 #top-title {
     color: #facc15;
     text-style: bold;
@@ -255,11 +297,133 @@ Button:focus {
     height: 1fr;
 }
 
+#analysis-view-container {
+    height: 1fr;
+    padding: 0 1 1 1;
+}
+
+#analysis-header {
+    height: 7;
+    margin-bottom: 1;
+}
+
+#analysis-header-title {
+    width: 1fr;
+    height: 7;
+}
+
+#analysis-ascii-title {
+    width: 1fr;
+    height: 5;
+    margin-bottom: 1;
+    color: #facc15;
+    text-style: bold;
+}
+
+#analysis-tabs {
+    height: 1fr;
+}
+
+#analysis-scan-controls {
+    height: 1;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#analysis-scan-summary {
+    height: 1;
+    color: #c084fc;
+    margin-bottom: 1;
+}
+
+#analysis-scan-layout {
+    height: 1fr;
+}
+
+#analysis-scan-table-box {
+    width: 60%;
+    height: 1fr;
+    border: solid #2c214c;
+    background: #0b0818;
+    margin-right: 1;
+}
+
+#analysis-scan-table, #analysis-report-table {
+    height: 1fr;
+}
+
+#analysis-scan-detail-box {
+    width: 40%;
+    height: 1fr;
+    border: solid #2c214c;
+    background: #0b0818;
+    padding: 1;
+}
+
+#analysis-report-nav {
+    height: 1;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#analysis-trajectory-controls {
+    height: 1;
+    align: left middle;
+    margin-bottom: 1;
+}
+
+#analysis-traj-input-sat {
+    width: 32;
+    height: 1;
+    margin-right: 1;
+    border: none;
+    background: #120e24;
+    color: #ffffff;
+    padding: 0 1;
+}
+
+#analysis-traj-input-min {
+    width: 12;
+    height: 1;
+    margin-right: 1;
+    border: none;
+    background: #120e24;
+    color: #ffffff;
+    padding: 0 1;
+}
+
+#analysis-traj-result-box {
+    height: 1fr;
+    border: solid #2c214c;
+    background: #0b0818;
+    padding: 1;
+}
+
+#dashboard-header {
+    height: 11;
+    margin-bottom: 1;
+}
+
+#dashboard-header-actions {
+    width: 1fr;
+    height: 11;
+}
+
+#dashboard-header-title {
+    width: 1fr;
+    height: 11;
+}
+
 #dashboard-ascii-title, #shell-ascii-title, #settings-ascii-title {
     height: 5;
+    width: 3fr;
     margin: 0 0 1 0;
     color: #facc15;
     text-style: bold;
+}
+
+#dashboard-ascii-title {
+    width: 1fr;
 }
 
 #settings-ascii-title {
@@ -373,14 +537,121 @@ SelectCurrent {
 }
 
 #catalog-left-column {
-    width: 60%;
+    width: 70%;
     height: 1fr;
     margin-right: 1;
 }
 
 #catalog-right-column {
-    width: 40%;
+    width: 30%;
     height: 1fr;
+}
+
+#catalog-fetch-box {
+    width: 1fr;
+    height: 6;
+    border: solid #2c214c;
+    background: #0b0818;
+    padding: 0 1;
+    border-title-align: center;
+}
+
+#catalog-fetch-controls {
+    height: 1;
+    align: center middle;
+}
+
+#catalog-fetch-controls Select {
+    width: 1fr;
+    margin-right: 1;
+    height: 1;
+}
+
+#catalog-fetch-controls Button {
+    min-width: 6;
+    height: 1;
+    margin-right: 1;
+    background: #2e1d54;
+    color: #facc15;
+}
+
+#catalog-fetch-status {
+    height: 1;
+    color: #c084fc;
+}
+
+#catalog-fetch-progress {
+    height: 1;
+    width: 100%;
+}
+
+#catalog-fetch-error {
+    height: 1;
+    color: #f87171;
+}
+
+#catalog-delete-row {
+    height: 3;
+    align: center middle;
+    width: 1fr;
+}
+
+#catalog-delete-box {
+    width: 1fr;
+    height: 5;
+    border: solid #572727;
+    background: #0b0818;
+    padding: 0 1;
+    border-title-align: center;
+}
+
+#btn-delete-displayed {
+    width: 32;
+    min-width: 32;
+    height: 3;
+    padding: 0;
+    content-align: center middle;
+    background: #321515;
+    color: #fca5a5;
+}
+
+#catalog-delete-confirm-input {
+    width: 1fr;
+    min-width: 8;
+    height: 3;
+    border: solid #7f1d1d;
+    background: #120e24;
+    color: #ffffff;
+}
+
+#btn-confirm-delete {
+    width: 14;
+    min-width: 14;
+    height: 3;
+    padding: 0;
+    margin-left: 1;
+    content-align: center middle;
+}
+
+#btn-confirm-delete {
+    background: #14532d;
+    color: #86efac;
+}
+
+#btn-confirm-delete:disabled {
+    background: #25202f;
+    color: #6b6478;
+}
+
+#btn-cancel-delete {
+    width: 12;
+    min-width: 12;
+    height: 3;
+    padding: 0;
+    margin-left: 1;
+    content-align: center middle;
+    background: #2c214c;
+    color: #c4b5fd;
 }
 
 #catalog-table-box {
@@ -391,6 +662,13 @@ SelectCurrent {
     padding: 0;
 }
 
+#catalog-record-count {
+    height: 1;
+    padding: 0 1;
+    color: #8f82ad;
+    text-align: right;
+}
+
 #schema-explorer-box {
     height: 1fr;
     min-height: 8;
@@ -398,6 +676,7 @@ SelectCurrent {
     background: #0b0818;
     margin-top: 1;
     padding: 0 1;
+    border-title-align: center;
 }
 
 #schema-explorer-title {
@@ -421,6 +700,7 @@ SelectCurrent {
     border: solid #2c214c;
     background: #0b0818;
     padding: 1;
+    border-title-align: center;
 }
 
 /* Data Tables */
@@ -654,12 +934,28 @@ DataTable > .datatable--hover {
     padding: 0 1 1 1;
 }
 
+#shell-header {
+    width: 1fr;
+    height: auto;
+    align: left top;
+    margin-bottom: 1;
+}
+
+#shell-header-title {
+    width: 2fr;
+    height: auto;
+}
+
+#shell-ascii-title {
+    width: 1fr;
+}
+
 #shell-top-controls {
+    width: 3fr;
     height: auto;
     border: solid #2c214c;
     background: #0b0818;
     padding: 1;
-    margin-bottom: 1;
 }
 
 #shell-quick-row {

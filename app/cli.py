@@ -160,7 +160,10 @@ def alerts_flow() -> None:
 
 def sync_flow() -> None:
     from ingest.apis import run_multi_source_sync
-    prompt = ui.color("  ▸ Ingestion source [all/celestrak/satnogs/iss/cache] (default: all): ", ui.CLR_CYAN)
+    prompt = ui.color(
+        "  ▸ Source [all/celestrak/satnogs/open_notify/nasa/n2yo/spacetrack/cache] (default: all): ",
+        ui.CLR_CYAN,
+    )
     choice = input(prompt).strip().lower() or "all"
     live = (choice != "cache")
 
@@ -176,6 +179,8 @@ def sync_flow() -> None:
             ui.CLR_GREEN,
         )
     )
+    for warning in result.get("source_errors", []):
+        print(ui.color(f"  ! {warning}", ui.CLR_YELLOW))
     print(ui.color(f"  ✔ Automated collision scan: {result['conjunctions']} close pairs evaluated and stored.", ui.CLR_CYAN))
 
 

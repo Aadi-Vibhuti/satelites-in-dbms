@@ -48,7 +48,7 @@ cp .env.example .env
 # 4. Schema + dummy rows
 python -m app --init-db
 
-# 5. Ingest (Multi-source space APIs: CelesTrak, SatNOGS, WhereTheISS, NASA)
+# 5. Ingest (multi-source satellite data)
 python -m app --sync
 
 # 6. Launch Mission Control TUI
@@ -67,7 +67,7 @@ The TUI opens to a near-empty, minimalistic **Home Page** displaying the clean s
    - **`[>] Fleet Catalog`**: Search by NORAD ID or name, filter by Orbit Status (`Active`, `Inactive`, `Decayed`), Mission Type (`Comm`, `Nav`, `EO`, `Sci`), or Fleet Operator. Split-pane shows Spacecraft Telemetry Card, orbital parameters, payload specs, recent orbital samples, and logged maneuvers.
    - **`[!] Collision Alerts`**: Conjunction proximity warning table with miss distance (km) and color-coded collision risk percentages. Recalculate conjunction warnings live from latest orbital vectors.
    - **`[#] Reports & Analytics`**: Multi-view reports for Fleet by Operator, Mission Types, Space Debris Accumulation, **Interactive Trajectory Extrapolation Tool** (projecting future lat/lon/alt), and Ingestion Audit Log.
-   - **`[*] Ingest & Sync`**: Live multi-step telemetry ingestion with progress bar (Step 1 to 5) across CelesTrak, SatNOGS, WhereTheISS, and NASA NeoWs.
+   - **`[*] Ingest & Sync`**: Live multi-step ingestion with progress across CelesTrak, SatNOGS, WhereTheISS, NASA NeoWs, N2YO, and Space-Track.
 
 2. **`[2] SQL Shell`**:
    - Interactive SQL query terminal against MariaDB `ois_db`.
@@ -114,8 +114,8 @@ sql/seed.sql            dummy rows for a first demo
 ingest/apis.py          multi-source ingestion (CelesTrak, SatNOGS, WhereTheISS, NASA)
 ingest/celestrak.py     CelesTrak GP parser & legacy sync
 app/tui.py              Textual Mission Control TUI (Home, Dashboard, Shell, Settings)
-app/tui.tcss            TUI stylesheet & theme system
-app/config.py           configuration & persistence manager (themes, keys, DB)
+app/tui.tcss            TUI stylesheet
+app/config.py           configuration & persistence manager (API access, DB)
 app/cli.py              CLI flags & legacy menu
 app/queries.py          alerts, reports, projection
 cache/                  cached space telemetry while developing

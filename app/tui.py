@@ -5,7 +5,7 @@ Features:
   [1] Dashboard, [2] SQL Shell, [3] Settings, [q] Exit.
 - Operational Dashboard (Fleet Catalog, Conjunction Alerts, Analytical Reports, Multi-API Ingestion).
 - Interactive SQL Shell to execute arbitrary queries and view tabular results.
-- Settings Panel for themes, API keys, database credentials, and storage paths.
+- Settings Panel for API access, database credentials, and storage paths.
 - Multi-API telemetry ingestion (CelesTrak, SatNOGS, WhereTheISS, NASA NeoWs) with live multi-step progress bar.
 - Refined, minimalistic aesthetic using geometric symbols instead of emojis.
 """
@@ -13,6 +13,7 @@ Features:
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -52,6 +53,10 @@ from app import art, queries
 from app.config import load_config, save_config
 from app.db import execute_raw_sql, get_connection, ping, settings
 from ingest.apis import run_multi_source_sync
+
+
+class SyncCancelled(Exception):
+    """Raised when the user cancels an in-progress catalog fetch."""
 
 
 class SQLQueryEditor(TextArea):
@@ -230,6 +235,7 @@ def block_ascii_word(word: str) -> Text:
         "R": ("11110", "10001", "11110", "10100", "10010"),
         "S": ("01111", "10000", "01110", "00001", "11110"),
         "T": ("11111", "00100", "00100", "00100", "00100"),
+        "Y": ("10001", "10001", "01010", "00100", "00100"),
     }
     letters = [glyphs[char] for char in word.upper() if char in glyphs]
     logo = Text()
@@ -247,7 +253,10 @@ def block_ascii_word(word: str) -> Text:
 def _format_mysql_table(columns: list[str], rows: list[tuple[Any, ...]]) -> list[str]:
     """Format query results with the ASCII borders used by the MariaDB client."""
     values = [[fmt_val(value) for value in row] for row in rows]
-    widths = [max(len(str(column)), *(len(row[index]) for row in values)) for index, column in enumerate(columns)]
+    widths = [
+        max([len(str(column)), *(len(row[index]) for row in values)])
+        for index, column in enumerate(columns)
+    ]
     border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
     lines = [border, "|" + "|".join(f" {str(column):<{width}} " for column, width in zip(columns, widths)) + "|", border]
     lines.extend("|" + "|".join(f" {value:<{width}} " for value, width in zip(row, widths)) + "|" for row in values)
@@ -265,10 +274,10 @@ class HelpModal(ModalScreen):
                 "\n"
                 "[bold yellow]global navigation[/]\n"
                 "  [yellow]esc / h[/]    return to home page\n"
-                "  [yellow]1[/]          home: dashboard | dashboard: catalog\n"
-                "  [yellow]2[/]          home: sql shell | dashboard: alerts\n"
-                "  [yellow]3[/]          home: settings  | dashboard: reports\n"
-                "  [yellow]4[/]          dashboard: ingest\n"
+                "  [yellow]1[/]          home: dashboard | dashboard: catalog | analysis: scans\n"
+                "  [yellow]2[/]          home: analysis  | dashboard: alerts  | analysis: reports\n"
+                "  [yellow]3[/]          home: sql shell | dashboard: reports | analysis: trajectory\n"
+                "  [yellow]4[/]          home: settings  | dashboard: ingest\n"
                 "  [yellow]/[/]          focus search filter in catalog\n"
                 "  [yellow]r[/]          refresh current view / recalculate alerts\n"
                 "  [yellow]?[/]          show this guide\n"
@@ -301,11 +310,11 @@ class OISApp(App):
     BINDINGS = [
         Binding("escape", "handle_escape", "home", priority=True),
         Binding("h", "switch_view('home')", "home", show=False),
-        Binding("1", "handle_key_1", "1", show=False, priority=True),
-        Binding("2", "handle_key_2", "2", show=False, priority=True),
-        Binding("3", "handle_key_3", "3", show=False, priority=True),
-        Binding("4", "handle_key_4", "4", show=False, priority=True),
-        Binding("/", "focus_search", "search", priority=True),
+        Binding("1", "handle_key_1", "1", show=False),
+        Binding("2", "handle_key_2", "2", show=False),
+        Binding("3", "handle_key_3", "3", show=False),
+        Binding("4", "handle_key_4", "4", show=False),
+        Binding("/", "focus_search", "search"),
         Binding("r", "refresh_current_view", "refresh"),
         Binding("question_mark", "show_help", "help"),
         Binding("q", "quit", "quit"),
@@ -316,10 +325,19 @@ class OISApp(App):
         self.config = load_config()
         self.current_view = "home"
         self.cached_satellites: list[dict] = []
+        self.displayed_satellite_norads: list[str] = []
+        self.pending_delete_norads: list[str] = []
         self.current_report_subview = "op"
         self.db_connected = False
         self.shell_output_mode = "neat"
         self.shell_raw_history: list[str] = []
+        self.sync_pause_event = threading.Event()
+        self.sync_pause_event.set()
+        self.sync_cancel_event = threading.Event()
+        self.sync_running = False
+        self.current_analysis_report = "op"
+        self.current_analysis_scan = "conjunction"
+        self.analysis_findings: list[dict[str, Any]] = []
 
     def compose(self) -> ComposeResult:
         # Top status bar (clean, borderless top bar without bulky Header)
@@ -338,14 +356,49 @@ class OISApp(App):
                     yield Static("", id="home-menu-title")
                     yield Label("Orbital Intelligence systems", id="home-menu-subtitle")
                     yield Button("1 · dashboard", id="menu-btn-dashboard", classes="home-menu-btn")
-                    yield Button("2 · shell", id="menu-btn-shell", classes="home-menu-btn")
-                    yield Button("3 · settings", id="menu-btn-settings", classes="home-menu-btn")
+                    yield Button("2 · analysis", id="menu-btn-analysis", classes="home-menu-btn")
+                    yield Button("3 · shell", id="menu-btn-shell", classes="home-menu-btn")
+                    yield Button("4 · settings", id="menu-btn-settings", classes="home-menu-btn")
                     yield Button("q · exit", id="menu-btn-exit", classes="home-menu-btn")
-                    yield Label("press 1-3 to switch · q to exit", id="home-menu-hint")
+                    yield Label("press 1-4 to switch · q to exit", id="home-menu-hint")
 
         # VIEW 2: DASHBOARD
         with Vertical(id="dashboard-view-container"):
-            yield Static(block_ascii_word("dashboard"), id="dashboard-ascii-title")
+            with Horizontal(id="dashboard-header"):
+                with Vertical(id="dashboard-header-title"):
+                    yield Static(block_ascii_word("dashboard"), id="dashboard-ascii-title")
+                    yield Button("back to homepage", id="btn-home-dashboard", classes="back-home-btn")
+                with Vertical(id="dashboard-header-actions"):
+                    with Vertical(id="catalog-fetch-box"):
+                        with Horizontal(id="catalog-fetch-controls"):
+                            yield StripedSelect(
+                                [
+                                    ("local", "cache"),
+                                    ("CelesTrak GP", "celestrak"),
+                                    ("SatNOGS DB", "satnogs"),
+                                    ("WhereTheISS", "open_notify"),
+                                    ("NASA NeoWs", "nasa"),
+                                    ("N2YO", "n2yo"),
+                                    ("Space-Track", "spacetrack"),
+                                    ("all sources", "all"),
+                                    ("All APIs", "all_apis"),
+                                ],
+                                value="all",
+                                id="catalog-fetch-source",
+                                classes="filter-select",
+                            )
+                            yield Button("fetch", id="btn-catalog-fetch")
+                            yield Button("pause", id="btn-catalog-fetch-pause", disabled=True)
+                            yield Button("cancel", id="btn-catalog-fetch-cancel", disabled=True)
+                        yield Label("idle", id="catalog-fetch-status")
+                        yield ProgressBar(total=100, show_eta=False, id="catalog-fetch-progress")
+                        yield Static("", id="catalog-fetch-error")
+                    with Vertical(id="catalog-delete-box"):
+                        with Horizontal(id="catalog-delete-row"):
+                            yield Button("delete displayed records", id="btn-delete-displayed")
+                            yield Input(placeholder="type DELETE", id="catalog-delete-confirm-input")
+                            yield Button("confirm", id="btn-confirm-delete", disabled=True)
+                            yield Button("cancel", id="btn-cancel-delete")
             with TabbedContent(id="main-tabs"):
                 # TAB 1: FLEET CATALOG
                 with TabPane("catalog [1]", id="tab-catalog"):
@@ -375,11 +428,11 @@ class OISApp(App):
                         with Vertical(id="catalog-left-column"):
                             with Vertical(id="catalog-table-box"):
                                 yield DataTable(id="table-satellites", cursor_type="row")
+                                yield Label("0 records", id="catalog-record-count")
                         with Vertical(id="catalog-right-column"):
                             with ScrollableContainer(id="satellite-detail-pane"):
                                 yield Static("[dim italic]select a satellite to inspect telemetry...[/]", id="detail-card-content")
                             with Vertical(id="schema-explorer-box"):
-                                yield Label("DATABASE STRUCTURE", id="schema-explorer-title")
                                 yield Tree("ois_db", id="schema-explorer")
 
                 # TAB 2: COLLISION ALERTS
@@ -425,6 +478,9 @@ class OISApp(App):
                                     ("celestrak gp", "celestrak"),
                                     ("satnogs db", "satnogs"),
                                     ("wheretheiss live", "open_notify"),
+                                    ("nasa neows", "nasa"),
+                                    ("n2yo", "n2yo"),
+                                    ("space-track", "spacetrack"),
                                     ("local cache", "cache"),
                                 ],
                                 value="all",
@@ -438,26 +494,65 @@ class OISApp(App):
 
                     yield RichLog(id="sync-richlog", highlight=True, markup=True)
 
-        # VIEW 3: SQL SHELL
+        # VIEW 3: ANALYSIS
+        with Vertical(id="analysis-view-container"):
+            with Horizontal(id="analysis-header"):
+                with Vertical(id="analysis-header-title"):
+                    yield Static(block_ascii_word("analysis"), id="analysis-ascii-title")
+                    yield Button("back to homepage", id="btn-home-analysis", classes="back-home-btn")
+            with TabbedContent(id="analysis-tabs"):
+                with TabPane("scans [1]", id="analysis-scans-tab"):
+                    with Horizontal(id="analysis-scan-controls"):
+                        yield Button("close approaches", id="btn-scan-conjunction", classes="analysis-scan-btn")
+                        yield Button("low perigee", id="btn-scan-low-perigee", classes="analysis-scan-btn")
+                        yield Button("high eccentricity", id="btn-scan-eccentricity", classes="analysis-scan-btn")
+                        yield Button("missing data", id="btn-scan-data-gaps", classes="analysis-scan-btn")
+                    yield Label("Choose a scan to see affected satellites and their details.", id="analysis-scan-summary")
+                    with Horizontal(id="analysis-scan-layout"):
+                        with Vertical(id="analysis-scan-table-box"):
+                            yield DataTable(id="analysis-scan-table", cursor_type="row")
+                        with ScrollableContainer(id="analysis-scan-detail-box"):
+                            yield Static("[dim italic]Select a finding to inspect the affected satellite(s).[/]", id="analysis-scan-detail")
+
+                with TabPane("fleet reports [2]", id="analysis-reports-tab"):
+                    with Horizontal(id="analysis-report-nav"):
+                        yield Button("operator", id="btn-analysis-report-op", classes="analysis-report-btn -active")
+                        yield Button("types", id="btn-analysis-report-type", classes="analysis-report-btn")
+                        yield Button("debris", id="btn-analysis-report-debris", classes="analysis-report-btn")
+                        yield Button("sync history", id="btn-analysis-report-log", classes="analysis-report-btn")
+                    yield DataTable(id="analysis-report-table", cursor_type="row")
+
+                with TabPane("trajectory [3]", id="analysis-trajectory-tab"):
+                    with Horizontal(id="analysis-trajectory-controls"):
+                        yield Input(placeholder="NORAD ID or satellite name", id="analysis-traj-input-sat")
+                        yield Input(value="10", placeholder="minutes", id="analysis-traj-input-min")
+                        yield Button("project", id="btn-run-analysis-trajectory")
+                    with ScrollableContainer(id="analysis-traj-result-box"):
+                        yield Static("[dim italic]Enter a satellite and run a projection.[/]", id="analysis-traj-result")
+
+        # VIEW 4: SQL SHELL
         with Vertical(id="shell-view-container"):
-            yield Static(block_ascii_word("shell"), id="shell-ascii-title")
-            with Vertical(id="shell-top-controls"):
-                with Horizontal(id="shell-quick-row"):
-                    yield Label("[dim]queries:[/] ")
-                    yield Button("tables", id="chip-sql-tables", classes="shell-chip-btn")
-                    yield Button("satellites", id="chip-sql-satellites", classes="shell-chip-btn")
-                    yield Button("alerts", id="chip-sql-alerts", classes="shell-chip-btn")
-                    yield Button("positions", id="chip-sql-positions", classes="shell-chip-btn")
-                    yield Button("debris", id="chip-sql-debris", classes="shell-chip-btn")
+            with Horizontal(id="shell-header"):
+                with Vertical(id="shell-header-title"):
+                    yield Static(block_ascii_word("shell"), id="shell-ascii-title")
+                    yield Button("back to homepage", id="btn-home-shell", classes="back-home-btn")
+                with Vertical(id="shell-top-controls"):
+                    with Horizontal(id="shell-quick-row"):
+                        yield Label("[dim]queries:[/] ")
+                        yield Button("tables", id="chip-sql-tables", classes="shell-chip-btn")
+                        yield Button("satellites", id="chip-sql-satellites", classes="shell-chip-btn")
+                        yield Button("alerts", id="chip-sql-alerts", classes="shell-chip-btn")
+                        yield Button("positions", id="chip-sql-positions", classes="shell-chip-btn")
+                        yield Button("debris", id="chip-sql-debris", classes="shell-chip-btn")
 
-                with Horizontal(id="shell-input-row"):
-                    yield SQLQueryEditor("", id="shell-query-input", soft_wrap=True, show_line_numbers=False)
-                    yield Button("run", id="btn-run-query")
+                    with Horizontal(id="shell-input-row"):
+                        yield SQLQueryEditor("", id="shell-query-input", soft_wrap=True, show_line_numbers=False)
+                        yield Button("run", id="btn-run-query")
 
-                with Horizontal(id="shell-output-controls"):
-                    yield Label("Shift+Enter adds a line · Enter runs after ; · ↑/↓ move through lines and history", id="shell-editor-hint")
-                    yield Button("raw output", id="btn-toggle-output")
-                yield Label("ready to execute queries against mariadb ois_db.", id="shell-status-banner")
+                    with Horizontal(id="shell-output-controls"):
+                        yield Label("Shift+Enter adds a line · Enter runs after ; · ↑/↓ move through lines and history", id="shell-editor-hint")
+                        yield Button("raw output", id="btn-toggle-output")
+                    yield Label("ready to execute queries against mariadb ois_db.", id="shell-status-banner")
 
             with Vertical(id="shell-results-box"):
                 shell_results = DataTable(id="shell-results-table", cursor_type="row", zebra_stripes=True)
@@ -465,34 +560,29 @@ class OISApp(App):
                 yield shell_results
                 yield RichLog(id="shell-raw-output", highlight=False, markup=False, wrap=False)
 
-        # VIEW 4: SETTINGS
+        # VIEW 5: SETTINGS
         with Vertical(id="settings-view-container"):
             yield Static(block_ascii_word("settings"), id="settings-ascii-title")
+            yield Button("back to homepage", id="btn-home-settings", classes="back-home-btn")
             with ScrollableContainer(id="settings-panel"):
                 yield Label("settings", classes="settings-section-hdr")
 
-                yield Label("theme:", classes="settings-label")
+                yield Label("API access", classes="settings-section-hdr")
                 with Horizontal(classes="settings-row"):
-                    yield StripedSelect(
-                        [
-                            ("minimal dark", "minimal-dark"),
-                            ("cyberpunk", "cyberpunk"),
-                            ("nord", "nord"),
-                            ("matrix", "matrix"),
-                        ],
-                        value=self.config.get("theme", "minimal-dark"),
-                        id="setting-theme",
-                        classes="settings-input",
-                    )
-
-                yield Label("api keys", classes="settings-section-hdr")
-                with Horizontal(classes="settings-row"):
-                    yield Label("nasa api key:", classes="settings-label")
+                    yield Label("NASA key (DEMO_KEY works):", classes="settings-label")
                     yield Input(value=self.config.get("nasa_api_key", "DEMO_KEY"), id="setting-nasa-key", classes="settings-input")
 
                 with Horizontal(classes="settings-row"):
-                    yield Label("n2yo api key:", classes="settings-label")
-                    yield Input(value=self.config.get("n2yo_api_key", ""), placeholder="optional", id="setting-n2yo-key", classes="settings-input")
+                    yield Label("N2YO API key:", classes="settings-label")
+                    yield Input(value=self.config.get("n2yo_api_key", ""), placeholder="required for N2YO", id="setting-n2yo-key", classes="settings-input")
+
+                with Horizontal(classes="settings-row"):
+                    yield Label("space-track user:", classes="settings-label")
+                    yield Input(value=self.config.get("spacetrack_identity", ""), placeholder="account email", id="setting-spacetrack-user", classes="settings-input")
+
+                with Horizontal(classes="settings-row"):
+                    yield Label("space-track password:", classes="settings-label")
+                    yield Input(value=self.config.get("spacetrack_password", ""), password=True, id="setting-spacetrack-password", classes="settings-input")
 
                 yield Label("database", classes="settings-section-hdr")
                 with Horizontal(classes="settings-row"):
@@ -527,6 +617,13 @@ class OISApp(App):
         self._init_catalog_table()
         self._init_alerts_table()
         self._init_reports_table()
+        self._init_analysis_tables()
+        self.query_one("#catalog-fetch-box", Vertical).border_title = "FETCH RECORDS"
+        self.query_one("#catalog-delete-box", Vertical).border_title = "DELETE RECORDS"
+        self.query_one("#catalog-delete-confirm-input", Input).value = ""
+        self.query_one("#btn-confirm-delete", Button).disabled = True
+        self.query_one("#satellite-detail-pane", ScrollableContainer).border_title = "SATELLITE INFO"
+        self.query_one("#schema-explorer-box", Vertical).border_title = "DATABASE STRUCTURE"
         self.load_database_structure()
         self.load_catalog()
         self.load_alerts()
@@ -538,25 +635,32 @@ class OISApp(App):
     # -------------------------------------------------------------------------
 
     def switch_view(self, view_name: str) -> None:
+        if view_name == "dashboard":
+            self._clear_delete_confirmation()
         self.current_view = view_name
 
         home_cnt = self.query_one("#home-view-container", Vertical)
         dash_cnt = self.query_one("#dashboard-view-container", Vertical)
+        analysis_cnt = self.query_one("#analysis-view-container", Vertical)
         shell_cnt = self.query_one("#shell-view-container", Vertical)
         settings_cnt = self.query_one("#settings-view-container", Vertical)
         top_btn = self.query_one("#top-nav-btn", Button)
 
         home_cnt.display = (view_name == "home")
         dash_cnt.display = (view_name == "dashboard")
+        analysis_cnt.display = (view_name == "analysis")
         shell_cnt.display = (view_name == "shell")
         settings_cnt.display = (view_name == "settings")
 
         top_btn.display = (view_name != "home")
         if view_name == "shell":
             self.query_one("#shell-query-input", SQLQueryEditor).focus()
+        elif view_name == "analysis":
+            self.load_analysis_alerts()
+            self.load_analysis_report(self.current_analysis_report)
 
     def _apply_current_theme(self) -> None:
-        theme = self.config.get("theme", "minimal-dark")
+        theme = "minimal-dark"
         for cls in ("-theme-minimal-dark", "-theme-cyberpunk", "-theme-nord", "-theme-matrix"):
             self.screen.remove_class(cls)
         self.screen.add_class(f"-theme-{theme}")
@@ -676,8 +780,10 @@ class OISApp(App):
             self.notify(f"Failed to load catalog: {exc}", severity="error")
 
     def apply_catalog_filters(self) -> None:
+        self._clear_delete_confirmation()
         table = self.query_one("#table-satellites", DataTable)
         table.clear()
+        self.displayed_satellite_norads = []
 
         search_query = self.query_one("#catalog-search", Input).value.strip().lower()
         sel_status = self.query_one("#filter-status", Select).value
@@ -722,6 +828,10 @@ class OISApp(App):
                 Text(peri_str, style="magenta"),
                 key=norad,
             )
+            self.displayed_satellite_norads.append(norad)
+
+        count = table.row_count
+        self.query_one("#catalog-record-count", Label).update(f"{count:,} records")
 
         if table.row_count > 0:
             table.move_cursor(row=0)
@@ -799,6 +909,12 @@ class OISApp(App):
         table.clear(columns=True)
         table.add_columns("Detected (UTC)", "Status", "Object Alpha", "Object Bravo", "Separation (km)", "Collision Risk")
 
+    def _init_analysis_tables(self) -> None:
+        self.query_one("#analysis-scan-table", DataTable).clear(columns=True)
+        self.query_one("#analysis-report-table", DataTable).clear(columns=True)
+        self.query_one("#analysis-scan-table-box", Vertical).border_title = "SCAN RESULTS"
+        self.query_one("#analysis-scan-detail-box", ScrollableContainer).border_title = "AFFECTED SATELLITE(S)"
+
     def load_alerts(self) -> None:
         if not self.db_connected:
             return
@@ -866,10 +982,230 @@ class OISApp(App):
         try:
             made = queries.generate_collision_alerts()
             self.load_alerts()
+            if self.current_analysis_scan == "conjunction":
+                self.load_analysis_alerts()
             self._check_db_and_stats()
             self.notify(f"Generated and logged {len(made)} conjunction alert(s)", severity="information")
         except Exception as exc:
             self.notify(f"Alert calculation failed: {exc}", severity="error")
+
+    def load_analysis_alerts(self) -> None:
+        self.run_analysis_scan("conjunction", recalculate=False)
+
+    def run_analysis_scan(self, scan: str, *, recalculate: bool = True) -> None:
+        self.current_analysis_scan = scan
+        self.analysis_findings = []
+        table = self.query_one("#analysis-scan-table", DataTable)
+        table.clear(columns=True)
+        detail = self.query_one("#analysis-scan-detail", Static)
+        detail.update("[dim italic]Select a finding to inspect the affected satellite(s).[/]")
+
+        if not self.db_connected:
+            self.query_one("#analysis-scan-summary", Label).update("Database unavailable; scans require a database connection.")
+            return
+
+        try:
+            if scan == "conjunction":
+                if recalculate:
+                    queries.generate_collision_alerts()
+                    self.load_alerts()
+                    self._check_db_and_stats()
+                rows = queries.list_alerts()
+                table.add_columns("Detected (UTC)", "Status", "Object A", "Object B", "Distance", "Risk score")
+                for index, row in enumerate(rows):
+                    self.analysis_findings.append({"kind": scan, **row})
+                    detected = row["Detected_At"]
+                    detected_text = detected.strftime("%Y-%m-%d %H:%M") if isinstance(detected, datetime) else str(detected)
+                    table.add_row(
+                        detected_text,
+                        fmt_alert_status(row.get("Status")),
+                        f"{row['Object_A']} ({row['NORAD_A']})",
+                        f"{row['Object_B']} ({row['NORAD_B']})",
+                        f"{float(row['Distance_km']):,.3f} km",
+                        fmt_prob(row.get("Probability")),
+                        key=str(index),
+                    )
+                summary = f"{len(rows)} active close-approach findings · based on stored latest positions; risk score is heuristic"
+
+            elif scan in ("low-perigee", "eccentricity"):
+                satellites = queries.search_satellites()
+                if scan == "low-perigee":
+                    table.add_columns("NORAD", "Satellite", "Status", "Perigee km", "Apogee km", "Inclination °")
+                    affected = [
+                        sat for sat in satellites
+                        if sat.get("Perigee_km") is not None and float(sat["Perigee_km"]) < 200
+                    ]
+                    affected.sort(key=lambda sat: float(sat["Perigee_km"]))
+                    summary = f"{len(affected)} satellites with perigee below 200 km · screening threshold only"
+                else:
+                    table.add_columns("NORAD", "Satellite", "Status", "Eccentricity", "Perigee km", "Apogee km")
+                    affected = [
+                        sat for sat in satellites
+                        if sat.get("Eccentricity") is not None and float(sat["Eccentricity"]) >= 0.1
+                    ]
+                    affected.sort(key=lambda sat: float(sat["Eccentricity"]), reverse=True)
+                    summary = f"{len(affected)} satellites with eccentricity ≥ 0.10 · screening threshold only"
+
+                for index, sat in enumerate(affected):
+                    self.analysis_findings.append({"kind": scan, **sat})
+                    table.add_row(
+                        sat.get("NORAD_ID", ""),
+                        sat.get("Name", ""),
+                        fmt_status(sat.get("Status")),
+                        fmt_val(sat.get("Perigee_km")) if scan == "low-perigee" else fmt_val(sat.get("Eccentricity")),
+                        fmt_val(sat.get("Apogee_km")) if scan == "low-perigee" else fmt_val(sat.get("Perigee_km")),
+                        fmt_val(sat.get("Inclination")) if scan == "low-perigee" else fmt_val(sat.get("Apogee_km")),
+                        key=str(index),
+                    )
+
+            elif scan == "data-gaps":
+                table.add_columns("NORAD", "Satellite", "Status", "Data issue", "Last position")
+                with get_connection() as conn:
+                    cursor = conn.cursor(dictionary=True)
+                    cursor.execute(
+                        """
+                        SELECT s.NORAD_ID, s.Name, s.Operator, s.Status,
+                               o.Satellite_ID AS Has_Orbit,
+                               latest.Observed_At AS Last_Position
+                        FROM Satellite s
+                        LEFT JOIN Orbit_Parameters o ON o.Satellite_ID = s.Satellite_ID
+                        LEFT JOIN (
+                            SELECT Satellite_ID, MAX(Observed_At) AS Observed_At
+                            FROM Position_History GROUP BY Satellite_ID
+                        ) latest ON latest.Satellite_ID = s.Satellite_ID
+                        WHERE o.Satellite_ID IS NULL OR latest.Observed_At IS NULL
+                        ORDER BY s.Name
+                        LIMIT 1000
+                        """
+                    )
+                    affected = cursor.fetchall()
+                    cursor.close()
+                for index, sat in enumerate(affected):
+                    issues = []
+                    if sat.get("Has_Orbit") is None:
+                        issues.append("missing orbit parameters")
+                    if sat.get("Last_Position") is None:
+                        issues.append("missing position history")
+                    sat["Issue"] = "; ".join(issues)
+                    self.analysis_findings.append({"kind": scan, **sat})
+                    last_position = sat.get("Last_Position")
+                    table.add_row(
+                        sat.get("NORAD_ID", ""),
+                        sat.get("Name", ""),
+                        fmt_status(sat.get("Status")),
+                        sat["Issue"],
+                        last_position.strftime("%Y-%m-%d %H:%M") if isinstance(last_position, datetime) else "none",
+                        key=str(index),
+                    )
+                summary = f"{len(affected)} satellites missing orbital or position data (showing up to 1,000)"
+            else:
+                return
+
+            self.query_one("#analysis-scan-summary", Label).update(summary)
+            if self.analysis_findings:
+                table.move_cursor(row=0)
+                self.display_analysis_finding(0)
+            else:
+                detail.update("[dim italic]No satellites matched this scan.[/]")
+        except Exception as exc:
+            self.query_one("#analysis-scan-summary", Label).update(f"Scan failed: {exc}")
+            self.notify(f"Analysis scan failed: {exc}", severity="error")
+
+    def display_analysis_finding(self, row_index: int) -> None:
+        if row_index < 0 or row_index >= len(self.analysis_findings):
+            return
+        finding = self.analysis_findings[row_index]
+        lines: list[str] = []
+        try:
+            if finding["kind"] == "conjunction":
+                lines.extend([
+                    "[bold red]CLOSE-APPROACH FINDING[/]",
+                    f"[dim]Distance:[/] {float(finding['Distance_km']):,.3f} km",
+                    f"[dim]Heuristic score:[/] {fmt_val(finding.get('Probability'))}%",
+                    f"[dim]Status:[/] {finding.get('Status')}",
+                    "[dim]This is a latest-position screen, not a future conjunction prediction.[/]",
+                    "",
+                ])
+                profiles = [
+                    (finding.get("NORAD_A"), finding.get("Object_A")),
+                    (finding.get("NORAD_B"), finding.get("Object_B")),
+                ]
+            else:
+                profiles = [(finding.get("NORAD_ID"), finding.get("Name"))]
+                lines.extend([
+                    f"[bold yellow]{finding.get('Issue') or 'SCAN MATCH'}[/]" if finding["kind"] == "data-gaps" else "[bold yellow]SCAN MATCH[/]",
+                    f"[dim]Scan:[/] {finding['kind']}",
+                    "",
+                ])
+
+            for norad, fallback_name in profiles:
+                sat = queries.view_satellite(str(norad)) if norad else None
+                if not sat:
+                    lines.append(f"[bold yellow]{fallback_name or norad}[/]")
+                    lines.append(f"[dim]NORAD:[/] {norad or '—'}")
+                    continue
+                lines.extend([
+                    f"[bold yellow]{sat.get('Name')}[/] [magenta][{str(sat.get('Sat_Type') or 'untyped').upper()}][/]",
+                    f"[dim]NORAD:[/] {sat.get('NORAD_ID')}   [dim]Operator:[/] {sat.get('Operator') or '—'}",
+                    f"[dim]Status:[/] {sat.get('Status')}   [dim]Launch:[/] {fmt_val(sat.get('Launch_Date'))}",
+                    f"[dim]Inclination:[/] {fmt_val(sat.get('Inclination'))}°   [dim]Eccentricity:[/] {fmt_val(sat.get('Eccentricity'))}",
+                    f"[dim]Perigee:[/] {fmt_val(sat.get('Perigee_km'))} km   [dim]Apogee:[/] {fmt_val(sat.get('Apogee_km'))} km",
+                    f"[dim]Orbit epoch:[/] {fmt_val(sat.get('Epoch'))}",
+                ])
+                positions = sat.get("recent_positions", [])
+                if positions:
+                    latest = positions[0]
+                    lines.append(
+                        f"[dim]Latest position:[/] {fmt_val(latest.get('Observed_At'))} · "
+                        f"{fmt_val(latest.get('Lat'))}, {fmt_val(latest.get('Lon'))}, {fmt_val(latest.get('Alt_km'))} km"
+                    )
+                lines.append("")
+            self.query_one("#analysis-scan-detail", Static).update("\n".join(lines))
+        except Exception as exc:
+            self.query_one("#analysis-scan-detail", Static).update(f"[red]Could not load finding details: {exc}[/]")
+
+    def load_analysis_report(self, mode: str) -> None:
+        self.current_analysis_report = mode
+        for button in self.query(".analysis-report-btn"):
+            button.remove_class("-active")
+        self.query_one(f"#btn-analysis-report-{mode}", Button).add_class("-active")
+        table = self.query_one("#analysis-report-table", DataTable)
+        table.clear(columns=True)
+
+        try:
+            if mode == "op":
+                table.add_columns("Fleet Operator", "Total Satellites", "Active Operational", "Active Share")
+                for row in queries.report_by_operator():
+                    total = int(row["Satellites"])
+                    active = int(row.get("Active") or 0)
+                    share = f"{active / total * 100:.1f}%" if total else "0.0%"
+                    table.add_row(row["Operator"], total, active, share)
+            elif mode == "type":
+                table.add_columns("Mission Type", "Specialization", "Total Satellites")
+                type_names = {
+                    "comm": "Communications & Relay",
+                    "nav": "Global Navigation (GPS/Galileo/BeiDou)",
+                    "eo": "Earth Observation & Remote Sensing",
+                    "sci": "Space Science & Astronomy",
+                    "untyped": "General Orbital Body",
+                }
+                for row in queries.report_by_type():
+                    sat_type = str(row["Sat_Type"]).lower()
+                    table.add_row(f"[{sat_type.upper()}]", type_names.get(sat_type, sat_type.title()), row["Satellites"])
+            elif mode == "debris":
+                table.add_columns("Catalog Date", "Tracked Space Debris Objects", "Status")
+                for row in queries.report_debris_trend():
+                    day = row.get("Day")
+                    day_text = day.strftime("%Y-%m-%d") if isinstance(day, datetime) else str(day)
+                    table.add_row(day_text, row["Debris_Count"], fmt_status(row.get("Status")))
+            elif mode == "log":
+                table.add_columns("Sync ID", "Timestamp (UTC)", "Ingest Source", "Rows Upserted", "Status")
+                for row in queries.sync_log():
+                    synced = row.get("Synced_At")
+                    synced_text = synced.strftime("%Y-%m-%d %H:%M:%S") if isinstance(synced, datetime) else str(synced)
+                    table.add_row(row["Sync_ID"], synced_text, row["Source"], row["Rows_Upserted"], fmt_status(row.get("Status")))
+        except Exception as exc:
+            self.notify(f"Analysis report failed: {exc}", severity="error")
 
     # -------------------------------------------------------------------------
     # Analytics & Reports
@@ -958,12 +1294,17 @@ class OISApp(App):
         except Exception as exc:
             self.notify(f"Report query error: {exc}", severity="error")
 
-    def run_trajectory_projection(self) -> None:
-        term = self.query_one("#traj-input-sat", Input).value.strip()
-        min_str = self.query_one("#traj-input-min", Input).value.strip()
+    def run_trajectory_projection(
+        self,
+        input_id: str = "traj-input-sat",
+        minutes_id: str = "traj-input-min",
+        result_id: str = "traj-result-text",
+    ) -> None:
+        term = self.query_one(f"#{input_id}", Input).value.strip()
+        min_str = self.query_one(f"#{minutes_id}", Input).value.strip()
         minutes = int(min_str) if min_str.isdigit() else 10
 
-        out_view = self.query_one("#traj-result-text", Static)
+        out_view = self.query_one(f"#{result_id}", Static)
         if not term:
             self.notify("Please enter a satellite NORAD ID or Name", severity="warning")
             return
@@ -1000,35 +1341,100 @@ class OISApp(App):
     # -------------------------------------------------------------------------
 
     @work(thread=True)
-    def run_multi_api_sync_task(self, source: str) -> None:
+    def run_multi_api_sync_task(self, source: str, *, catalog_fetch: bool = False) -> None:
         log = self.query_one("#sync-richlog", RichLog)
         step_lbl = self.query_one("#sync-step-label", Label)
         p_bar = self.query_one("#sync-progress-bar", ProgressBar)
         btn = self.query_one("#btn-trigger-sync", Button)
+        status = self.query_one("#catalog-fetch-status", Label) if catalog_fetch else None
+        fetch_bar = self.query_one("#catalog-fetch-progress", ProgressBar) if catalog_fetch else None
+        fetch_btn = self.query_one("#btn-catalog-fetch", Button) if catalog_fetch else None
+        pause_btn = self.query_one("#btn-catalog-fetch-pause", Button) if catalog_fetch else None
+        cancel_btn = self.query_one("#btn-catalog-fetch-cancel", Button) if catalog_fetch else None
+        error_view = self.query_one("#catalog-fetch-error", Static) if catalog_fetch else None
 
-        btn.disabled = True
+        if catalog_fetch:
+            self.sync_running = True
+            self.sync_cancel_event.clear()
+            self.sync_pause_event.set()
+            fetch_btn.disabled = True
+            pause_btn.disabled = False
+            cancel_btn.disabled = False
+            error_view.update("")
+            fetch_bar.progress = 0
+            status.update("starting…")
+        else:
+            btn.disabled = True
         log.write(f"\n[bold magenta]═════ INGESTION RUN STARTED (Source: {source.upper()}) ═════[/]")
 
         def update_progress(step: int, total_steps: int, msg: str, pct: float) -> None:
             self.app.call_from_thread(step_lbl.update, f"[bold yellow]Step {step}/{total_steps}:[/] {msg}")
             self.app.call_from_thread(setattr, p_bar, "progress", int(pct * 100))
             self.app.call_from_thread(log.write, f"[dim][{datetime.now().strftime('%H:%M:%S')}][/] {msg}")
+            if catalog_fetch:
+                self.app.call_from_thread(status.update, msg)
+                self.app.call_from_thread(setattr, fetch_bar, "progress", int(pct * 100))
+
+        def check_fetch_controls() -> None:
+            if self.sync_cancel_event.is_set():
+                raise SyncCancelled("Download cancelled by user")
+            self.sync_pause_event.wait()
+            if self.sync_cancel_event.is_set():
+                raise SyncCancelled("Download cancelled by user")
 
         try:
             live = (source != "cache")
-            result = run_multi_source_sync(source=source, live=live, progress_callback=update_progress)
+            result = run_multi_source_sync(
+                source=source,
+                live=live,
+                progress_callback=update_progress,
+                control_callback=check_fetch_controls if catalog_fetch else None,
+            )
 
             log.write(f"[bold green]✔ Ingest Complete:[/] {result['upserted']} satellites, {result['history']} positions, {result['debris']} debris.")
             if result.get("sources"):
                 log.write(f"  [yellow]APIs Consulted:[/] {', '.join(result['sources'])}")
+            if result.get("source_errors"):
+                warning_text = "\n".join(result["source_errors"])
+                log.write(f"[bold yellow]Source warnings:[/] {warning_text}")
+                if catalog_fetch:
+                    self.app.call_from_thread(
+                        error_view.update,
+                        "[bold yellow]Source warnings:[/] " + "; ".join(result["source_errors"]),
+                    )
 
             self.app.call_from_thread(self._refresh_all_data)
-            self.notify("Telemetry sync complete!", severity="information")
+            if catalog_fetch and not result.get("upserted") and not result.get("sources"):
+                message = "No records were returned. Check the network or local cache and try again."
+                self.app.call_from_thread(status.update, "no records received")
+                source_warnings = "; ".join(result.get("source_errors", []))
+                detail = f"{message} {source_warnings}" if source_warnings else message
+                self.app.call_from_thread(error_view.update, f"[bold red]Fetch failed:[/] {detail}")
+                self.notify(message, severity="error")
+            else:
+                if catalog_fetch:
+                    self.app.call_from_thread(status.update, "complete")
+                self.notify("Telemetry sync complete!", severity="information")
+        except SyncCancelled as exc:
+            log.write(f"[yellow]↷ {exc}[/]")
+            if catalog_fetch:
+                self.app.call_from_thread(status.update, "cancelled")
         except Exception as exc:
             log.write(f"[bold red]✕ Ingest encountered error: {exc}[/]")
+            if catalog_fetch:
+                self.app.call_from_thread(status.update, "failed")
+                self.app.call_from_thread(error_view.update, f"[bold red]Fetch failed:[/] {exc}")
             self.notify(f"Sync error: {exc}", severity="error")
         finally:
-            btn.disabled = False
+            if catalog_fetch:
+                self.sync_running = False
+                self.app.call_from_thread(setattr, fetch_btn, "disabled", False)
+                self.app.call_from_thread(setattr, pause_btn, "disabled", True)
+                self.app.call_from_thread(setattr, cancel_btn, "disabled", True)
+                self.app.call_from_thread(setattr, pause_btn, "label", "pause")
+                self.sync_pause_event.set()
+            else:
+                btn.disabled = False
 
     def _refresh_all_data(self) -> None:
         self._check_db_and_stats()
@@ -1096,9 +1502,10 @@ class OISApp(App):
     # -------------------------------------------------------------------------
 
     def save_settings_panel(self) -> None:
-        theme = self.query_one("#setting-theme", Select).value
         nasa_key = self.query_one("#setting-nasa-key", Input).value.strip()
         n2yo_key = self.query_one("#setting-n2yo-key", Input).value.strip()
+        spacetrack_identity = self.query_one("#setting-spacetrack-user", Input).value.strip()
+        spacetrack_password = self.query_one("#setting-spacetrack-password", Input).value
         db_host = self.query_one("#setting-db-host", Input).value.strip()
         db_port = self.query_one("#setting-db-port", Input).value.strip()
         db_user = self.query_one("#setting-db-user", Input).value.strip()
@@ -1106,9 +1513,10 @@ class OISApp(App):
         db_dir = self.query_one("#setting-db-dir", Input).value.strip()
 
         updates: dict[str, Any] = {
-            "theme": theme if isinstance(theme, str) else "minimal-dark",
             "nasa_api_key": nasa_key or "DEMO_KEY",
             "n2yo_api_key": n2yo_key,
+            "spacetrack_identity": spacetrack_identity,
+            "spacetrack_password": spacetrack_password,
             "db_host": db_host or "127.0.0.1",
             "db_port": int(db_port) if db_port.isdigit() else 3307,
             "db_user": db_user or "ois",
@@ -1119,7 +1527,7 @@ class OISApp(App):
         self.config = save_config(updates)
         self._apply_current_theme()
         self._check_db_and_stats()
-        self.notify("Configuration saved and theme applied!", severity="information")
+        self.notify("Configuration saved.", severity="information")
 
     # -------------------------------------------------------------------------
     # Event Handlers & Input Events
@@ -1127,12 +1535,14 @@ class OISApp(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
-        if btn_id == "top-nav-btn":
+        if btn_id in ("top-nav-btn", "btn-home-dashboard", "btn-home-analysis", "btn-home-shell", "btn-home-settings"):
             self.switch_view("home")
 
         # Home Menu Buttons
         elif btn_id == "menu-btn-dashboard":
             self.switch_view("dashboard")
+        elif btn_id == "menu-btn-analysis":
+            self.switch_view("analysis")
         elif btn_id == "menu-btn-shell":
             self.switch_view("shell")
         elif btn_id == "menu-btn-settings":
@@ -1141,6 +1551,52 @@ class OISApp(App):
             self.exit()
 
         # Catalog Buttons
+        elif btn_id == "btn-delete-displayed":
+            if self.query_one("#main-tabs", TabbedContent).active != "tab-catalog":
+                self.notify("Open the catalog tab before deleting displayed records.", severity="warning")
+                return
+            self.pending_delete_norads = list(self.displayed_satellite_norads)
+            if not self.pending_delete_norads:
+                self.notify("There are no displayed satellite records to delete.", severity="warning")
+            else:
+                self.query_one("#catalog-delete-confirm-input", Input).focus()
+                self.notify(
+                    f"Ready to delete {len(self.pending_delete_norads):,} displayed records. Type DELETE to enable confirmation.",
+                    severity="warning",
+                )
+        elif btn_id == "btn-confirm-delete":
+            confirm_input = self.query_one("#catalog-delete-confirm-input", Input)
+            if confirm_input.value != "DELETE":
+                return
+            if not self.pending_delete_norads:
+                self.notify("Click delete displayed records first.", severity="warning")
+                return
+            norads = list(self.pending_delete_norads)
+            confirm_input.disabled = True
+            self.query_one("#btn-delete-displayed", Button).disabled = True
+            self.query_one("#btn-confirm-delete", Button).disabled = True
+            self.delete_displayed_satellites(norads)
+        elif btn_id == "btn-cancel-delete":
+            self._clear_delete_confirmation()
+        elif btn_id == "btn-catalog-fetch":
+            selected = self.query_one("#catalog-fetch-source", Select).value
+            source = str(selected) if isinstance(selected, str) else "all"
+            if source == "all_apis":
+                source = "all"
+            self.run_multi_api_sync_task(source=source, catalog_fetch=True)
+        elif btn_id == "btn-catalog-fetch-pause":
+            if self.sync_pause_event.is_set():
+                self.sync_pause_event.clear()
+                event.button.label = "resume"
+                self.query_one("#catalog-fetch-status", Label).update("paused")
+            else:
+                self.sync_pause_event.set()
+                event.button.label = "pause"
+                self.query_one("#catalog-fetch-status", Label).update("resuming…")
+        elif btn_id == "btn-catalog-fetch-cancel":
+            self.sync_cancel_event.set()
+            self.sync_pause_event.set()
+            self.query_one("#catalog-fetch-status", Label).update("cancelling…")
         elif btn_id == "btn-reset-filters":
             self.query_one("#catalog-search", Input).value = ""
             self.query_one("#filter-status", Select).value = "ALL"
@@ -1152,9 +1608,26 @@ class OISApp(App):
         # Alerts Buttons
         elif btn_id == "btn-recalc-alerts":
             self.recalculate_alerts()
+        elif btn_id in ("btn-scan-conjunction", "btn-scan-low-perigee", "btn-scan-eccentricity", "btn-scan-data-gaps"):
+            scan_modes = {
+                "btn-scan-conjunction": "conjunction",
+                "btn-scan-low-perigee": "low-perigee",
+                "btn-scan-eccentricity": "eccentricity",
+                "btn-scan-data-gaps": "data-gaps",
+            }
+            self.run_analysis_scan(scan_modes[btn_id])
         elif btn_id == "btn-refresh-alerts":
             self.load_alerts()
             self.notify("Alerts refreshed", timeout=2)
+
+        elif btn_id in (
+            "btn-analysis-report-op",
+            "btn-analysis-report-type",
+            "btn-analysis-report-debris",
+            "btn-analysis-report-log",
+        ):
+            mode = btn_id.removeprefix("btn-analysis-report-")
+            self.load_analysis_report(mode)
 
         # Reports Buttons
         elif btn_id in ("btn-rep-op", "btn-rep-type", "btn-rep-debris", "btn-rep-traj", "btn-rep-log"):
@@ -1169,6 +1642,12 @@ class OISApp(App):
 
         elif btn_id == "btn-run-trajectory":
             self.run_trajectory_projection()
+        elif btn_id == "btn-run-analysis-trajectory":
+            self.run_trajectory_projection(
+                input_id="analysis-traj-input-sat",
+                minutes_id="analysis-traj-input-min",
+                result_id="analysis-traj-result",
+            )
 
         # Sync Button
         elif btn_id == "btn-trigger-sync":
@@ -1209,14 +1688,58 @@ class OISApp(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "catalog-search":
             self.apply_catalog_filters()
+        elif event.input.id == "catalog-delete-confirm-input":
+            self.query_one("#btn-confirm-delete", Button).disabled = event.value != "DELETE"
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        return
+
+    @work(thread=True)
+    def delete_displayed_satellites(self, norads: list[str]) -> None:
+        try:
+            deleted = 0
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                for start in range(0, len(norads), 500):
+                    batch = norads[start : start + 500]
+                    placeholders = ", ".join(["%s"] * len(batch))
+                    cursor.execute(
+                        f"DELETE FROM Satellite WHERE NORAD_ID IN ({placeholders})",
+                        batch,
+                    )
+                    deleted += cursor.rowcount
+                cursor.close()
+            self.app.call_from_thread(self._finish_displayed_delete, deleted, None)
+        except Exception as exc:
+            self.app.call_from_thread(self._finish_displayed_delete, 0, str(exc))
+
+    def _finish_displayed_delete(self, deleted: int, error: str | None) -> None:
+        self.pending_delete_norads = []
+        self.query_one("#catalog-delete-confirm-input", Input).disabled = False
+        self.query_one("#catalog-delete-confirm-input", Input).value = ""
+        self.query_one("#btn-confirm-delete", Button).disabled = True
+        delete_button = self.query_one("#btn-delete-displayed", Button)
+        delete_button.disabled = False
+        if error:
+            self.notify(f"Could not delete displayed records: {error}", severity="error")
+            return
+        self._refresh_all_data()
+        self.notify(f"Deleted {deleted:,} displayed satellite records.", severity="information")
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id in ("filter-status", "filter-type", "filter-operator"):
             self.apply_catalog_filters()
-        elif event.select.id == "setting-theme":
-            if isinstance(event.value, str):
-                self.config["theme"] = event.value
-                self._apply_current_theme()
+        elif event.select.id == "catalog-fetch-source":
+            self._clear_delete_confirmation()
+
+    def _clear_delete_confirmation(self) -> None:
+        """Clear the typed confirmation and discard its displayed-record snapshot."""
+        self.pending_delete_norads = []
+        confirm_input = self.query_one("#catalog-delete-confirm-input", Input)
+        confirm_input.value = ""
+        confirm_input.disabled = False
+        self.query_one("#btn-confirm-delete", Button).disabled = True
+        self.query_one("#btn-delete-displayed", Button).disabled = False
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "table-satellites":
@@ -1224,6 +1747,8 @@ class OISApp(App):
             self.display_satellite_details(norad)
         elif event.data_table.id == "table-alerts":
             self.display_alert_details(event.cursor_row)
+        elif event.data_table.id == "analysis-scan-table":
+            self.display_analysis_finding(event.cursor_row)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id == "table-satellites" and event.cursor_row is not None:
@@ -1237,6 +1762,8 @@ class OISApp(App):
                 self.display_alert_details(event.cursor_row)
             except Exception:
                 pass
+        elif event.data_table.id == "analysis-scan-table" and event.cursor_row is not None:
+            self.display_analysis_finding(event.cursor_row)
 
     # -------------------------------------------------------------------------
     # Actions & Global Keybindings
@@ -1253,21 +1780,29 @@ class OISApp(App):
             self.switch_view("dashboard")
         elif self.current_view == "dashboard":
             self.query_one("#main-tabs", TabbedContent).active = "tab-catalog"
+        elif self.current_view == "analysis":
+            self.query_one("#analysis-tabs", TabbedContent).active = "analysis-scans-tab"
 
     def action_handle_key_2(self) -> None:
         if self.current_view == "home":
-            self.switch_view("shell")
+            self.switch_view("analysis")
         elif self.current_view == "dashboard":
             self.query_one("#main-tabs", TabbedContent).active = "tab-alerts"
+        elif self.current_view == "analysis":
+            self.query_one("#analysis-tabs", TabbedContent).active = "analysis-reports-tab"
 
     def action_handle_key_3(self) -> None:
         if self.current_view == "home":
-            self.switch_view("settings")
+            self.switch_view("shell")
         elif self.current_view == "dashboard":
             self.query_one("#main-tabs", TabbedContent).active = "tab-reports"
+        elif self.current_view == "analysis":
+            self.query_one("#analysis-tabs", TabbedContent).active = "analysis-trajectory-tab"
 
     def action_handle_key_4(self) -> None:
-        if self.current_view == "dashboard":
+        if self.current_view == "home":
+            self.switch_view("settings")
+        elif self.current_view == "dashboard":
             self.query_one("#main-tabs", TabbedContent).active = "tab-sync"
 
     def action_switch_view(self, view_name: str) -> None:
@@ -1292,6 +1827,15 @@ class OISApp(App):
             elif active == "tab-reports":
                 self.load_report_subview(self.current_report_subview)
                 self.notify("Reports refreshed", timeout=2)
+        elif self.current_view == "analysis":
+            active = self.query_one("#analysis-tabs", TabbedContent).active
+            if active == "analysis-scans-tab":
+                self.run_analysis_scan(
+                    self.current_analysis_scan,
+                    recalculate=(self.current_analysis_scan == "conjunction"),
+                )
+            elif active == "analysis-reports-tab":
+                self.load_analysis_report(self.current_analysis_report)
 
     def action_show_help(self) -> None:
         self.push_screen(HelpModal())

@@ -132,7 +132,7 @@ def search_satellites(
     sql = f"""
         SELECT s.NORAD_ID, s.Name, s.Operator, s.Status,
                {TYPE_SQL} AS Sat_Type,
-               o.Inclination, o.Apogee_km, o.Perigee_km
+               o.Inclination, o.Eccentricity, o.Apogee_km, o.Perigee_km
         FROM Satellite s
         LEFT JOIN Orbit_Parameters o ON o.Satellite_ID = s.Satellite_ID
         {TYPE_JOINS}
