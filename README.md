@@ -7,7 +7,7 @@ See `architecture.md` for the shape of the system and `plan.md` for the build or
 ## Stack
 
 - MariaDB 11 (`ois_db`)
-- Python 3.10+ with `requests` and `mysql-connector-python`
+- Python 3.14+ with `requests` and `mysql-connector-python`
 - CelesTrak GP JSON (cached under `cache/` while developing)
 
 ## Quick Start (Linux)
@@ -20,14 +20,43 @@ chmod +x setup.sh
 ```
 
 This automatically:
-- Checks Python 3.8+ and Docker
+- Checks Python 3.14+ and Docker/Podman
 - Configures `.env`
 - Starts the MariaDB container (`docker compose up -d`)
 - Sets up `.venv` and installs dependencies
 - Bootstraps the database schema and ingests telemetry
 - Installs the global `ois` and `satellites` commands in `~/.local/bin/` and creates `./ois`
 
-Once installed, you can launch the system from anywhere by typing `ois` or `./ois`.
+Once installed, launch the system with `ois` or `./ois`.
+
+## Quick Start (Windows)
+
+The Windows setup runs Python natively and uses Docker Desktop for MariaDB.
+
+Prerequisites:
+
+- Windows 10 or 11
+- Python 3.14 or newer, available as `python` in PowerShell
+- Docker Desktop for Windows, running with Docker Compose available
+
+From the project folder, open PowerShell and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+The setup script creates `.env` from `.env.example` if needed, creates `.venv`, installs Python dependencies, starts MariaDB, and initializes the schema and starter data when the database is reachable. It keeps an existing `.env` unchanged. If PowerShell blocks local scripts, the command above applies the execution policy only to that process.
+
+Launch Mission Control or pass CLI options through the Windows launcher:
+
+```powershell
+.\ois.cmd
+.\ois.cmd --alerts
+.\ois.cmd --view 25544
+.\ois.cmd --sync
+```
+
+To start MariaDB later, run `docker compose up -d` from the project folder. If initial database setup was skipped, run `.\ois.cmd --init-db` and then `.\ois.cmd --sync`.
 
 ---
 
@@ -37,7 +66,7 @@ Once installed, you can launch the system from anywhere by typing `ois` or `./oi
 # 1. Database
 docker compose up -d
 
-# 2. Python env
+# 2. Python env (Linux/macOS)
 python3 -m venv .venv
 source .venv/bin/activate    # On Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -52,7 +81,7 @@ python -m app --init-db
 python -m app --sync
 
 # 6. Launch Mission Control TUI
-python -m app    # or: ./ois
+python -m app    # Linux/macOS; Windows: .\.venv\Scripts\python.exe -m app
 ```
 
 ## Mission Control TUI

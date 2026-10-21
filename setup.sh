@@ -6,7 +6,7 @@
 #   ./setup.sh
 #
 
-set -e
+set -Eeuo pipefail
 
 # Colors
 CLR_RESET="\033[0m"
@@ -29,6 +29,13 @@ success() { echo -e "  ${CLR_GREEN}[✔]${CLR_RESET} $1"; }
 warn()    { echo -e "  ${CLR_YELLOW}[!]${CLR_RESET} $1"; }
 error()   { echo -e "  ${CLR_RED}[x]${CLR_RESET} $1"; }
 step()    { echo -e "\n${CLR_CYAN_BOLD}==>${CLR_RESET} ${CLR_BOLD}$1${CLR_RESET}"; }
+
+on_error() {
+    local exit_code=$?
+    error "Setup failed at line ${BASH_LINENO[0]} (exit code ${exit_code})."
+    exit "$exit_code"
+}
+trap on_error ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -78,10 +85,9 @@ step "[1/5] Checking system prerequisites..."
 PYTHON_BIN=""
 for candidate in python3 python; do
     if command -v "$candidate" >/dev/null 2>&1; then
-        PY_VER=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
         PY_MAJOR=$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo "0")
         PY_MINOR=$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo "0")
-        if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 8 ]; then
+        if [ "$PY_MAJOR" -gt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -ge 14 ]; }; then
             PYTHON_BIN="$candidate"
             break
         fi
@@ -89,7 +95,7 @@ for candidate in python3 python; do
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-    error "Python 3.8 or higher is required, but was not found."
+    error "Python 3.14 or higher is required by pyproject.toml, but was not found."
     echo -e "      Install it via your distribution package manager:"
     echo -e "        - Ubuntu/Debian: sudo apt update && sudo apt install python3 python3-venv"
     echo -e "        - Arch/CachyOS:  sudo pacman -S python"
@@ -106,6 +112,14 @@ if [ -f "docker-compose.yml" ]; then
     DETECTED_PORT=$(grep -oE '[0-9]+:3306' docker-compose.yml | head -n 1 | cut -d: -f1 || echo "")
     if [ -n "$DETECTED_PORT" ]; then
         DB_PORT="$DETECTED_PORT"
+    fi
+fi
+
+# An existing .env is authoritative; otherwise use the Compose host port.
+if [ -f ".env" ]; then
+    ENV_PORT=$(sed -n 's/^OIS_DB_PORT=[[:space:]]*//p' .env | tail -n 1)
+    if [[ "$ENV_PORT" =~ ^[0-9]+$ ]]; then
+        DB_PORT="$ENV_PORT"
     fi
 fi
 
@@ -194,7 +208,7 @@ if [ ! -d ".venv" ]; then
         info "Creating virtual environment using uv..."
         uv venv .venv
         info "Installing dependencies via uv..."
-        uv pip install -r requirements.txt
+        uv pip install --python .venv/bin/python -r requirements.txt
     else
         info "Creating virtual environment using python3 -m venv..."
         if ! "$PYTHON_BIN" -m venv .venv 2>/dev/null; then
@@ -203,16 +217,16 @@ if [ ! -d ".venv" ]; then
             exit 1
         fi
         info "Installing dependencies via pip..."
-        .venv/bin/python -m pip install --upgrade pip --quiet
-        .venv/bin/pip install -r requirements.txt --quiet
+        .venv/bin/python -m pip install --upgrade pip
+        .venv/bin/python -m pip install -r requirements.txt
     fi
     success "Virtual environment ready at .venv/"
 else
     success "Existing virtual environment found at .venv/"
     if command -v uv >/dev/null 2>&1; then
-        uv pip install -r requirements.txt --quiet || true
+        uv pip install --python .venv/bin/python -r requirements.txt
     else
-        .venv/bin/pip install -r requirements.txt --quiet || true
+        .venv/bin/python -m pip install -r requirements.txt
     fi
 fi
 
@@ -225,12 +239,18 @@ if check_db_port; then
     success "Database schema and seed applied."
 
     info "Ingesting initial satellite catalog and debris telemetry..."
-    .venv/bin/python -m app --sync || true
-    success "Satellite data ingestion complete."
+    if .venv/bin/python -m app --sync; then
+        success "Satellite data ingestion complete."
+    else
+        warn "Initial data sync failed; you can retry later with ./ois --sync."
+    fi
 
     info "Calculating initial proximity and collision alerts..."
-    .venv/bin/python -m app --alerts >/dev/null 2>&1 || true
-    success "Collision alerts precalculated."
+    if .venv/bin/python -m app --alerts >/dev/null 2>&1; then
+        success "Collision alerts precalculated."
+    else
+        warn "Could not precalculate alerts; run ./ois --alerts after syncing data."
+    fi
 else
     warn "Skipping database population since MariaDB is not yet connected."
     echo -e "      Run later: ./ois --init-db && ./ois --sync"
