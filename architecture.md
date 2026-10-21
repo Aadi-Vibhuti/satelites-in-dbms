@@ -28,15 +28,15 @@ Three layers only: ingest, store, use.
 flowchart LR
     A[CelesTrak API] --> B[Python ingest]
     B --> C[(MariaDB ois_db)]
-    D[CLI menu] --> E[Python queries]
+    D[Textual TUI / CLI] --> E[Python queries]
     E --> C
 ```
 
 | Layer | Responsibility | Tech |
 |-------|----------------|------|
 | **Ingest** | Fetch, parse, upsert, log the sync | Python, `requests` |
-| **Store** | Schema, keys, history, alerts | MariaDB |
-| **Use** | View, search, alerts, reports | Python CLI |
+| **Store** | Schema, keys, history, alerts | MariaDB 11 |
+| **Use** | Full-screen interactive TUI, search, alerts, reports | Python, `textual`, `rich` |
 
 CelesTrak responses are cached as local JSON during development so the API is not hit in a loop.
 

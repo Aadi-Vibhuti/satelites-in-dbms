@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CACHE_PATH = ROOT / "cache" / "celestrak.json"
 DEBRIS_CACHE_PATH = ROOT / "cache" / "debris.json"
 
-UA = "OIS-student-project/1.0 (Orbital Intelligence System DBMS demo)"
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
 
 # Small, typed slices — enough for a viva demo, small enough to cache.

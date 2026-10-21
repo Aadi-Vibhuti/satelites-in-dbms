@@ -109,3 +109,46 @@ def init_schema() -> None:
     with get_connection() as conn:
         _run_sql_file(conn, schema)
         _run_sql_file(conn, seed)
+
+
+def execute_raw_sql(query: str) -> dict[str, Any]:
+    """Execute arbitrary SQL query for the interactive Shell console."""
+    import time
+    clean_sql = query.strip()
+    if not clean_sql:
+        return {"status": "error", "error": "Query string is empty"}
+
+    t_start = time.perf_counter()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(clean_sql)
+            t_elapsed = (time.perf_counter() - t_start) * 1000.0
+
+            if cursor.description:
+                columns = [d[0] for d in cursor.description]
+                rows = cursor.fetchall()
+                cursor.close()
+                return {
+                    "status": "ok",
+                    "columns": columns,
+                    "rows": rows,
+                    "row_count": len(rows),
+                    "duration_ms": round(t_elapsed, 2),
+                }
+            else:
+                affected = cursor.rowcount
+                cursor.close()
+                return {
+                    "status": "ok",
+                    "affected_rows": affected,
+                    "duration_ms": round(t_elapsed, 2),
+                    "message": f"Query OK, {affected} row(s) affected",
+                }
+    except Exception as exc:
+        t_elapsed = (time.perf_counter() - t_start) * 1000.0
+        return {
+            "status": "error",
+            "error": str(exc),
+            "duration_ms": round(t_elapsed, 2),
+        }

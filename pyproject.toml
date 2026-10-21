@@ -7,7 +7,12 @@ authors = [
     { name = "Aadi Vibhuti", email = "aadivibhuti10@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "mysql-connector-python>=26.7.0",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
+    "textual>=8.2.8",
+]
 
 [project.scripts]
 satelites-in-dbms = "satelites_in_dbms:main"

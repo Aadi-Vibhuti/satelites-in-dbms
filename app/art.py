@@ -81,15 +81,15 @@ def render_satellite_art(
     out: list[str] = []
 
     for y, line in enumerate(lines):
-        # Orbital color gradient
+        # Purple & Yellow cosmic palette
         row_ratio = y / max(1, len(lines) - 1)
-        r = int(50 + row_ratio * 35)
-        g = int(220 - row_ratio * 60)
-        b = 255
+        r = int(185 - row_ratio * 40)
+        g = int(95 - row_ratio * 45)
+        b = int(250 - row_ratio * 25)
         fg = f"\033[38;2;{r};{g};{b}m"
-        bold_core = f"\033[1;38;2;{min(255, r + 70)};{min(255, g + 40)};255m"
-        accent = "\033[38;5;81m"
-        faint_star = "\033[38;5;237m"
+        bold_core = "\033[1;38;2;253;224;71m"
+        accent = "\033[38;2;250;204;21m"
+        faint_star = "\033[38;2;115;75;155m"
         rst = "\033[0m"
 
         chars: list[str] = []

@@ -1,0 +1,12 @@
+{
+  "theme": "minimal-dark",
+  "nasa_api_key": "DEMO_KEY",
+  "n2yo_api_key": "",
+  "default_api_source": "all",
+  "db_host": "127.0.0.1",
+  "db_port": 3307,
+  "db_user": "ois",
+  "db_password": "ois",
+  "db_name": "ois_db",
+  "db_storage_dir": "/home/aadi/satelites-in-dbms/sql"
+}

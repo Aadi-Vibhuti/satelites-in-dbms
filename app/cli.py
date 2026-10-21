@@ -35,7 +35,7 @@ def banner(show_art: bool = True, art_mode: str = "clean") -> None:
     w = 74
     inner = w - 2
 
-    title_text = "🛰️   ORBITAL INTELLIGENCE SYSTEM"
+    title_text = "[#] ORBITAL INTELLIGENCE SYSTEM"
     sub_text = "MariaDB Telemetry & Orbital Dynamics Tracking Catalog"
     db_text = f"Connected: {cfg['database']} @ {cfg['host']}:{cfg['port']}"
 
@@ -59,20 +59,20 @@ def menu() -> None:
     inner = w - 2
 
     def menu_row(num: str, icon: str, title: str, desc: str) -> str:
-        row_content = f"  {c_num(num)} {icon}  {ui.color(title.ljust(21), ui.CLR_BOLD)} {ui.color(desc, ui.CLR_DIM)}"
+        row_content = f"  {c_num(num)} {icon} {ui.color(title.ljust(21), ui.CLR_BOLD)} {ui.color(desc, ui.CLR_DIM)}"
         return "  " + b("│") + ui.pad(row_content, inner) + b("│")
 
-    top = "\n  " + b("╭─") + ui.color(" 🛰️  MISSION CONTROL CONSOLE ", ui.CLR_HEADER) + b("─" * (w - 32)) + b("╮")
+    top = "\n  " + b("╭─") + ui.color(" [#] MISSION CONTROL CONSOLE ", ui.CLR_HEADER) + b("─" * (w - 32)) + b("╮")
     bot = "  " + b("╰" + "─" * inner + "╯")
 
     print(top)
-    print(menu_row("1", "🔭", "View Satellite", "Detailed telemetry card by NORAD/Name"))
-    print(menu_row("2", "🔍", "Search Fleet", "Filter by Operator, Status, or Type"))
-    print(menu_row("3", "⚠️", "Collision Alerts", "Active proximity warnings & risk"))
-    print(menu_row("4", "🔄", "Sync Telemetry", "Ingest from CelesTrak API or cache"))
-    print(menu_row("5", "📊", "Analytics & Reports", "Fleet stats, debris & trajectory"))
-    print(menu_row("6", "🎨", "Satellite ASCII Art", "Render spacecraft in multiple modes"))
-    print(menu_row("q", "🚪", "Exit Console", "Close session and return to shell"))
+    print(menu_row("1", "[>]", "View Satellite", "Detailed telemetry card by NORAD/Name"))
+    print(menu_row("2", "[#]", "Search Fleet", "Filter by Operator, Status, or Type"))
+    print(menu_row("3", "[!]", "Collision Alerts", "Active proximity warnings & risk"))
+    print(menu_row("4", "[*]", "Sync Telemetry", "Multi-source ingest or cache"))
+    print(menu_row("5", "[%]", "Analytics & Reports", "Fleet stats, debris & trajectory"))
+    print(menu_row("6", "[o]", "Satellite ASCII Art", "Render spacecraft in multiple modes"))
+    print(menu_row("q", "[x]", "Exit Console", "Close session and return to shell"))
     print(bot)
 
 
@@ -159,21 +159,24 @@ def alerts_flow() -> None:
 
 
 def sync_flow() -> None:
-    prompt = ui.color("  ▸ Ingestion source [cache/live] (default: cache): ", ui.CLR_CYAN)
-    choice = input(prompt).strip().lower() or "cache"
-    live = choice == "live"
-    print(ui.color("  ⏳ Syncing telemetry with CelesTrak...", ui.CLR_BLUE))
-    result = ingest_sync(live=live)
+    from ingest.apis import run_multi_source_sync
+    prompt = ui.color("  ▸ Ingestion source [all/celestrak/satnogs/iss/cache] (default: all): ", ui.CLR_CYAN)
+    choice = input(prompt).strip().lower() or "all"
+    live = (choice != "cache")
+
+    def cli_progress(step: int, total: int, msg: str, pct: float) -> None:
+        print(ui.color(f"  [{step}/{total}] {msg}", ui.CLR_BLUE))
+
+    result = run_multi_source_sync(source=choice, live=live, progress_callback=cli_progress)
     print(
         ui.color(
             f"  ✔ Sync {result['status'].upper()}: {result['upserted']} satellites, "
             f"{result['history']} positions, {result['debris']} debris "
-            f"({result['source']})",
+            f"(Sources: {', '.join(result.get('sources', []))})",
             ui.CLR_GREEN,
         )
     )
-    made = queries.generate_collision_alerts()
-    print(ui.color(f"  ✔ Automated collision scan: {len(made)} close pairs evaluated and stored.", ui.CLR_CYAN))
+    print(ui.color(f"  ✔ Automated collision scan: {result['conjunctions']} close pairs evaluated and stored.", ui.CLR_CYAN))
 
 
 def report_flow() -> None:
@@ -333,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         default="clean",
         help="Visual style for satellite ASCII art (clean, stars, raw)",
     )
+    parser.add_argument("--tui", action="store_true", help="Launch full interactive Terminal User Interface (default)")
+    parser.add_argument("--cli", action="store_true", help="Launch the legacy text menu loop instead of the TUI")
     args = parser.parse_args(argv)
 
     if args.art:
@@ -431,8 +436,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.sync:
         return 0
 
-    loop()
-    return 0
+    if args.cli:
+        loop()
+        return 0
+
+    from app import tui
+    return tui.run()
 
 
 if __name__ == "__main__":

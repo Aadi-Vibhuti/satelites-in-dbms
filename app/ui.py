@@ -105,7 +105,7 @@ def format_status(status: Any) -> str:
 def format_alert_status(status: Any) -> str:
     s = str(status).lower() if status else ""
     if s == "open":
-        return color("● open", CLR_RED_BOLD)
+        return color("■ open", CLR_RED_BOLD)
     if s == "watch":
         return color("▲ watch", CLR_YELLOW_BOLD)
     if s == "cleared":
@@ -237,7 +237,7 @@ def print_telemetry_card(sat: dict, indent: int = 2) -> None:
         dashes = inner_width - visible_len(tag_text) - 1
         return pad_str + b("├─") + color(tag_text, color_code) + b("─" * max(0, dashes)) + b("┤")
 
-    tag_top = " 🛰️  SPACECRAFT TELEMETRY CARD "
+    tag_top = " [#] SPACECRAFT TELEMETRY CARD "
     top_dashes = inner_width - visible_len(tag_top) - 1
     top = pad_str + b("╭─") + color(tag_top, CLR_CYAN_BOLD) + b("─" * max(0, top_dashes)) + b("╮")
     print()
@@ -248,7 +248,7 @@ def print_telemetry_card(sat: dict, indent: int = 2) -> None:
     print(card_line("Operator", str(sat.get("Operator") or "-"), "Type", sat_type_badge))
     print(card_line("Status", format_status(sat.get("Status")), "Launch Date", format_value(sat.get("Launch_Date"))))
 
-    print(divider(" 🌐 ORBITAL ELEMENTS ", CLR_BLUE_BOLD))
+    print(divider(" [o] ORBITAL ELEMENTS ", CLR_BLUE_BOLD))
 
     inc = sat.get("Inclination")
     inc_str = f"{inc:.4f}°" if inc is not None else "-"
@@ -266,7 +266,7 @@ def print_telemetry_card(sat: dict, indent: int = 2) -> None:
 
     sat_type = sat.get("Sat_Type")
     if sat_type in ("comm", "nav", "eo", "sci"):
-        print(divider(f" 📡 PAYLOAD SPECIFICATIONS ({sat_type.upper()}) ", CLR_YELLOW_BOLD))
+        print(divider(f" [*] PAYLOAD SPECIFICATIONS ({sat_type.upper()}) ", CLR_YELLOW_BOLD))
         if sat_type == "comm":
             print(card_line("Comm Band", str(sat.get("Band") or "-"), "Transponders", str(sat.get("Transponders") or "-")))
         elif sat_type == "nav":
