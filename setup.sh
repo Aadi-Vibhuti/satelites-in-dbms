@@ -181,7 +181,7 @@ else
         fi
     fi
 
-    info "Waiting for MariaDB port ${DB_PORT} to accept connections..."
+    info "Waiting for MariaDB port ${DB_PORT} to open..."
     TRIES=0
     MAX_TRIES=25
     until check_db_port || [ $TRIES -ge $MAX_TRIES ]; do
@@ -192,7 +192,7 @@ else
     echo ""
 
     if check_db_port; then
-        success "MariaDB container is online and accepting connections."
+        success "MariaDB port is open."
     else
         warn "MariaDB is not answering yet on port ${DB_PORT}."
         echo -e "      If starting Docker container for the first time, it may take another moment."
@@ -233,7 +233,27 @@ fi
 # 5. Database Schema & Data Ingestion
 step "[5/5] Initializing database schema & syncing telemetry..."
 
-if check_db_port; then
+check_db_connection() {
+    .venv/bin/python -c '
+import mysql.connector
+from app.db import settings
+connection = mysql.connector.connect(**settings(), connection_timeout=3)
+connection.close()
+' >/dev/null 2>&1
+}
+
+info "Waiting for MariaDB to complete its startup and accept authenticated connections..."
+TRIES=0
+MAX_TRIES=60
+until check_db_connection || [ "$TRIES" -ge "$MAX_TRIES" ]; do
+    sleep 2
+    TRIES=$((TRIES + 1))
+    echo -n "."
+done
+echo ""
+
+if check_db_connection; then
+    success "MariaDB is ready for application connections."
     info "Applying schema.sql and seed.sql..."
     .venv/bin/python -m app --init-db
     success "Database schema and seed applied."
@@ -252,8 +272,9 @@ if check_db_port; then
         warn "Could not precalculate alerts; run ./ois --alerts after syncing data."
     fi
 else
-    warn "Skipping database population since MariaDB is not yet connected."
-    echo -e "      Run later: ./ois --init-db && ./ois --sync"
+    warn "MariaDB did not become ready for application connections."
+    echo -e "      Check the container with: docker compose logs mariadb"
+    echo -e "      Once it is healthy, run: ./ois --init-db && ./ois --sync"
 fi
 
 # Create local ./ois launcher
