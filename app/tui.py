@@ -62,6 +62,11 @@ class SyncCancelled(Exception):
 class SQLQueryEditor(TextArea):
     """Multiline SQL editor with shell history at its vertical boundaries."""
 
+    BINDINGS = [
+        Binding("up", "history_previous", show=False, priority=True),
+        Binding("down", "history_next", show=False, priority=True),
+    ]
+
     def __init__(self, text: str = "", **kwargs: Any) -> None:
         super().__init__(text, **kwargs)
         self.command_history: list[str] = []
@@ -81,27 +86,29 @@ class SQLQueryEditor(TextArea):
             return
         await super()._on_key(event)
 
-    def on_key(self, event) -> None:
+    def action_history_previous(self) -> None:
         row, _ = self.cursor_location
-        lines = self.text.splitlines() or [""]
-        if event.key == "up" and row == 0 and self.command_history:
-            event.prevent_default()
-            event.stop()
-            if self.history_index is None:
-                self._history_draft = self.text
-                self.history_index = len(self.command_history)
-            self.history_index = max(0, self.history_index - 1)
+        if not self.command_history or (self.history_index is None and row != 0):
+            self.action_cursor_up()
+            return
+
+        if self.history_index is None:
+            self._history_draft = self.text
+            self.history_index = len(self.command_history)
+        self.history_index = max(0, self.history_index - 1)
+        self.load_text(self.command_history[self.history_index])
+
+    def action_history_next(self) -> None:
+        if self.history_index is None:
+            self.action_cursor_down()
+            return
+
+        self.history_index = min(len(self.command_history), self.history_index + 1)
+        if self.history_index == len(self.command_history):
+            self.load_text(self._history_draft)
+            self.history_index = None
+        else:
             self.load_text(self.command_history[self.history_index])
-            return
-        if event.key == "down" and self.history_index is not None and row >= len(lines) - 1:
-            event.prevent_default()
-            event.stop()
-            self.history_index = min(len(self.command_history), self.history_index + 1)
-            value = self.command_history[self.history_index] if self.history_index < len(self.command_history) else self._history_draft
-            self.load_text(value)
-            if self.history_index == len(self.command_history):
-                self.history_index = None
-            return
 
 
 class StripedSelectOverlay(SelectOverlay):
