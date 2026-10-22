@@ -1,0 +1,32 @@
+[
+  {
+    "catalog_id": "D98001",
+    "first_seen": "2026-10-01 00:00:00",
+    "status": "tracked"
+  },
+  {
+    "catalog_id": "D98002",
+    "first_seen": "2026-10-01 00:00:00",
+    "status": "tracked"
+  },
+  {
+    "catalog_id": "D98003",
+    "first_seen": "2026-10-05 00:00:00",
+    "status": "tracked"
+  },
+  {
+    "catalog_id": "D98004",
+    "first_seen": "2026-10-10 00:00:00",
+    "status": "tracked"
+  },
+  {
+    "catalog_id": "D98005",
+    "first_seen": "2026-10-15 00:00:00",
+    "status": "decayed"
+  },
+  {
+    "catalog_id": "D98006",
+    "first_seen": "2026-10-20 00:00:00",
+    "status": "tracked"
+  }
+]

@@ -514,6 +514,7 @@ class OISApp(App):
                         yield Button("low perigee", id="btn-scan-low-perigee", classes="analysis-scan-btn")
                         yield Button("high eccentricity", id="btn-scan-eccentricity", classes="analysis-scan-btn")
                         yield Button("missing data", id="btn-scan-data-gaps", classes="analysis-scan-btn")
+                        yield Button("scan database & refresh", id="btn-analysis-full-refresh")
                     yield Label("Choose a scan to see affected satellites and their details.", id="analysis-scan-summary")
                     with Horizontal(id="analysis-scan-layout"):
                         with Vertical(id="analysis-scan-table-box"):
@@ -998,6 +999,26 @@ class OISApp(App):
 
     def load_analysis_alerts(self) -> None:
         self.run_analysis_scan("conjunction", recalculate=False)
+
+    def scan_database_and_refresh(self) -> None:
+        """Recalculate conjunction risks, then refresh the visible data tables."""
+        if not self.db_connected:
+            self.notify("Database unavailable; analysis refresh requires a connection.", severity="error")
+            return
+        try:
+            made = queries.generate_collision_alerts()
+            self.load_alerts()
+            self.run_analysis_scan(self.current_analysis_scan, recalculate=False)
+            self.load_catalog()
+            self.load_analysis_report(self.current_analysis_report)
+            self._check_db_and_stats()
+            self.notify(
+                f"Database scan complete: recalculated risks and refreshed tables ({len(made)} close-approach findings).",
+                severity="information",
+                timeout=5,
+            )
+        except Exception as exc:
+            self.notify(f"Database scan failed: {exc}", severity="error")
 
     def run_analysis_scan(self, scan: str, *, recalculate: bool = True) -> None:
         self.current_analysis_scan = scan
@@ -1623,6 +1644,8 @@ class OISApp(App):
                 "btn-scan-data-gaps": "data-gaps",
             }
             self.run_analysis_scan(scan_modes[btn_id])
+        elif btn_id == "btn-analysis-full-refresh":
+            self.scan_database_and_refresh()
         elif btn_id == "btn-refresh-alerts":
             self.load_alerts()
             self.notify("Alerts refreshed", timeout=2)

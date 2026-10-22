@@ -397,12 +397,23 @@ def run_multi_source_sync(
                 if source == "spacetrack":
                     raise RuntimeError(f"Space-Track fetch failed: {exc}") from exc
 
+    demo_debris: list[dict] = []
     if not catalog_records and (source in ("all", "cache") or not live):
         # Fallback to cache
         cache_file = CACHE_DIR / "celestrak.json"
         if cache_file.exists():
             catalog_records = json.loads(cache_file.read_text(encoding="utf-8"))
             sources_used.append("Local Cache")
+        if source == "cache":
+            demo_file = CACHE_DIR / "demo_records.json"
+            if demo_file.exists():
+                demo_records = json.loads(demo_file.read_text(encoding="utf-8"))
+                if isinstance(demo_records, list):
+                    catalog_records.extend(demo_records)
+                    sources_used.append("Analysis Demo Records")
+            debris_file = CACHE_DIR / "demo_debris.json"
+            if debris_file.exists():
+                demo_debris = json.loads(debris_file.read_text(encoding="utf-8"))
 
     # Step 3: Fetching real-time telemetry (WhereTheISS & NASA)
     report(3, "Querying live real-time position telemetry (ISS vector & NASA NEOs)...", 0.55)
@@ -468,36 +479,37 @@ def run_multi_source_sync(
                 sat_id = row_sat[0]
                 upserted_count += 1
 
-                # Orbit parameters
-                try:
-                    inc = float(rec.get("INCLINATION") or 51.6)
-                    ecc = float(rec.get("ECCENTRICITY") or 0.001)
-                    apo_value = rec.get("APOGEE") or rec.get("APOAPSIS")
-                    peri_value = rec.get("PERIGEE") or rec.get("PERIAPSIS")
-                    if apo_value is None or peri_value is None:
-                        semi_major_axis = float(rec.get("SEMIMAJOR_AXIS") or 0)
-                        earth_radius_km = 6378.137
-                        apo_value = semi_major_axis * (1 + ecc) - earth_radius_km if semi_major_axis else 500.0
-                        peri_value = semi_major_axis * (1 - ecc) - earth_radius_km if semi_major_axis else 480.0
-                    apo = float(apo_value)
-                    peri = float(peri_value)
-                except (ValueError, TypeError):
-                    inc, ecc, apo, peri = 51.6, 0.001, 500.0, 480.0
+                # Orbit parameters; demo records can omit this to exercise data-gap scans.
+                if not rec.get("_ois_missing_orbit"):
+                    try:
+                        inc = float(rec.get("INCLINATION") or 51.6)
+                        ecc = float(rec.get("ECCENTRICITY") or 0.001)
+                        apo_value = rec.get("APOGEE") or rec.get("APOAPSIS")
+                        peri_value = rec.get("PERIGEE") or rec.get("PERIAPSIS")
+                        if apo_value is None or peri_value is None:
+                            semi_major_axis = float(rec.get("SEMIMAJOR_AXIS") or 0)
+                            earth_radius_km = 6378.137
+                            apo_value = semi_major_axis * (1 + ecc) - earth_radius_km if semi_major_axis else 500.0
+                            peri_value = semi_major_axis * (1 - ecc) - earth_radius_km if semi_major_axis else 480.0
+                        apo = float(apo_value)
+                        peri = float(peri_value)
+                    except (ValueError, TypeError):
+                        inc, ecc, apo, peri = 51.6, 0.001, 500.0, 480.0
 
-                cursor.execute(
-                    """
-                    INSERT INTO Orbit_Parameters
-                        (Satellite_ID, Inclination, Eccentricity, Apogee_km, Perigee_km, Epoch)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        Inclination = VALUES(Inclination),
-                        Eccentricity = VALUES(Eccentricity),
-                        Apogee_km = VALUES(Apogee_km),
-                        Perigee_km = VALUES(Perigee_km),
-                        Epoch = VALUES(Epoch)
-                    """,
-                    (sat_id, inc, ecc, apo, peri, now_dt),
-                )
+                    cursor.execute(
+                        """
+                        INSERT INTO Orbit_Parameters
+                            (Satellite_ID, Inclination, Eccentricity, Apogee_km, Perigee_km, Epoch)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            Inclination = VALUES(Inclination),
+                            Eccentricity = VALUES(Eccentricity),
+                            Apogee_km = VALUES(Apogee_km),
+                            Perigee_km = VALUES(Perigee_km),
+                            Epoch = VALUES(Epoch)
+                        """,
+                        (sat_id, inc, ecc, apo, peri, now_dt),
+                    )
 
                 # Subclass specialization
                 if sat_type == "comm":
@@ -520,6 +532,21 @@ def run_multi_source_sync(
                         "INSERT INTO Sci_Satellite (Satellite_ID, Mission, Instrument) VALUES (%s, %s, 'Spectrometer') ON DUPLICATE KEY UPDATE Mission=VALUES(Mission), Instrument=VALUES(Instrument)",
                         (sat_id, name),
                     )
+
+                for sample in rec.get("_ois_demo_positions", []):
+                    cursor.execute(
+                        """
+                        INSERT INTO Position_History (Satellite_ID, Observed_At, Lat, Lon, Alt_km)
+                        SELECT %s, %s, %s, %s, %s FROM DUAL
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM Position_History
+                            WHERE Satellite_ID = %s AND Observed_At = %s
+                        )
+                        """,
+                        (sat_id, sample["observed_at"], sample["lat"], sample["lon"], sample["alt_km"],
+                         sat_id, sample["observed_at"]),
+                    )
+                    history_count += cursor.rowcount
 
             # Insert real live ISS coordinates if available
             if live_iss:
@@ -551,6 +578,17 @@ def run_multi_source_sync(
                         Status = VALUES(Status)
                     """,
                     (cat_id, now_dt),
+                )
+                debris_count += 1
+
+            for d in demo_debris:
+                cursor.execute(
+                    """
+                    INSERT INTO Debris_Records (Parent_Satellite_ID, Catalog_ID, First_Seen, Status)
+                    VALUES (NULL, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE First_Seen=VALUES(First_Seen), Status=VALUES(Status)
+                    """,
+                    (d["catalog_id"], d["first_seen"], d.get("status", "tracked")),
                 )
                 debris_count += 1
 
